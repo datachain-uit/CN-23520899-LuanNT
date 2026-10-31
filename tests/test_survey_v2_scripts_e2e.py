@@ -102,6 +102,24 @@ def test_03_e1_phase_a_b(data_root):
     n_before = len(pf)
     b.main(["--datasets", COHORT, "--repeats", "0", "--secondary", "--random-draws", "3", "--prefilter", "150"])   # resume: không nhân đôi
     assert len(pd.read_csv(db / "classification_per_fold.csv")) == n_before
+    # v3.1.6 (QĐ25): --redo-methods chỉ tính lại một phương pháp, phần còn lại giữ nguyên (checkpoint / dòng cũ)
+    ck = d / "checkpoints"
+    other_before = {f.name: f.read_bytes() for f in ck.glob("*.csv") if "_l1_lr." not in f.name}
+    a.main(["--datasets", COHORT, "--methods", "f_test", "l1_lr", "stability_selection", "ktsp", "ihc_2", "ihc_4", "--redo-methods", "l1_lr",
+            "--k", "1", "2", "3", "4", "5", "10", "--repeats", "0", "--prefilter", "150"])
+    assert {f.name: f.read_bytes() for f in ck.glob("*.csv") if "_l1_lr." not in f.name} == other_before
+    sel2 = pd.read_csv(d / "selection_per_fold.csv")
+    assert set(sel2.method) == set(sel.method) and len(sel2) == len(sel)
+    cfg2 = json.loads((d / "config.json").read_text(encoding="utf-8"))
+    assert cfg2["redo_methods"] == ["l1_lr"] and cfg2["checkpoints_reused_from_commit"] == cfg["commit_hash"]
+    with pytest.raises(SystemExit):
+        a.main(["--datasets", COHORT, "--methods", "f_test", "--redo-methods", "l1_lr", "--repeats", "0", "--prefilter", "150"])
+    b.main(["--datasets", COHORT, "--repeats", "0", "--secondary", "--no-references", "--methods", "l1_lr", "--redo-methods", "l1_lr",
+            "--prefilter", "150"])
+    pf2 = pd.read_csv(db / "classification_per_fold.csv")
+    assert len(pf2) == n_before and set(pf2.method) == set(pf.method)
+    assert pf2.groupby(["repeat", "fold", "method", "k", "model"]).size().max() == 1
+    assert json.loads((db / "config.json").read_text(encoding="utf-8"))["redo_methods"] == ["l1_lr"]
 
 
 def test_04_e1b_and_e7(data_root):
@@ -115,6 +133,14 @@ def test_04_e1b_and_e7(data_root):
     assert (pr[(pr.n_t == "5") & (pr.method == "f_test")].C == 1.0).all()
     st = pd.read_csv(d / "e1b_stability.csv")
     assert (st.n_runs == 20).all() and st.nogueira.between(-1, 1.0001).all()
+    # v3.1.6: --redo-methods l1_lr -> số dòng không đổi, các dòng f_test giữ nguyên
+    f_before = pr[pr.method == "f_test"].sort_values(["split", "subset", "n_t", "k"]).auroc.tolist()
+    _load("run_survey_e1b_learning_curve").main(["--datasets", COHORT, "--methods", "l1_lr", "--redo-methods", "l1_lr", "--k", "2", "5",
+                                                 "--n-t", "5", "10", "pool", "--prefilter", "120", "--random-draws", "2", "--n-jobs", "1"])
+    pr2 = pd.read_csv(d / "e1b_per_run.csv", dtype={"n_t": str})
+    assert len(pr2) == len(pr) and set(pr2.method) == set(pr.method)
+    assert pr2[pr2.method == "f_test"].sort_values(["split", "subset", "n_t", "k"]).auroc.tolist() == f_before
+    assert json.loads((d / "config.json").read_text(encoding="utf-8"))["redo_methods"] == ["l1_lr"]
     _load("run_survey_e7_transfer_naive").main(["--datasets", COHORT, "--k", "2", "5", "--n-t", "5", "--prefilter", "120", "--n-jobs", "1"])
     e7 = pd.read_csv(data_root / "results" / "survey_v2" / "E7" / COHORT / "e7_per_run.csv", dtype={"n_t": str})
     assert set(e7.strategy) == {"source_only", "select_on_source", "pooled", "target_only"}
@@ -128,7 +154,7 @@ def test_04_e1b_and_e7(data_root):
 def test_05_e2_e3_timing(data_root):
     t = _load("run_survey_e2_e3_timing")
     sys.argv = ["run_survey_e2_e3_timing.py", "--methods", "f_test", "ktsp", "--repeats", "1", "--n-grid", "30", "60", "all",
-                "--p-grid", "50", "100", "all", "--k", "4", "10", "--wrappers"]
+                "--p-grid", "50", "100", "all", "--k", "4", "10", "--wrappers", "--isolate-memory"]
     import survey_v2.config as C
     C.WRAPPER_POP, C.WRAPPER_GENERATIONS = 4, 2
     C.E3_WRAPPER_BUDGETS = ((4, 2), (5, 2))
@@ -136,9 +162,15 @@ def test_05_e2_e3_timing(data_root):
     out = data_root / "results" / "survey_v2" / "E2_E3"
     cost = pd.read_csv(out / "e2_cost_point.csv")
     assert set(cost.method) == {"f_test", "ktsp", "ga", "bpso"} and set(cost.k) == {4, 10} and (cost.wall_s > 0).all()
+    assert "peak_mb" not in cost.columns and "maxrss_mb" not in cost.columns                      # v3.1.6 (QĐ27)
+    assert cost.maxrss_isolated_mb.notna().all() and (cost.maxrss_child_mb < 1500).all()         # bộ nhớ của chính tiến trình con
     exps = pd.read_csv(out / "e3_exponents.csv")
     assert set(exps.method) == {"f_test", "ktsp"}
-    assert (out / "machine_config.json").exists() and json.loads((out / "config.json").read_text())["k_e3"] == 4
+    cfg = json.loads((out / "config.json").read_text())
+    assert (out / "machine_config.json").exists() and cfg["k_e3"] == 4 and cfg["timing_tracemalloc"] is False
+    if sys.platform.startswith("linux"):
+        assert cfg["peak_source"] == "VmHWM" and (cost.peak_source == "VmHWM").all()
+    assert (out / "e3_wrapper_evals.csv").exists()                                                 # có wrapper -> có tệp
 
 
 def test_06_e4_e5_stability(data_root):
@@ -154,6 +186,17 @@ def test_06_e4_e5_stability(data_root):
     e5b = pd.read_csv(out / "e5b_seed_stability.csv")
     assert {"rf_importance", "stability_selection", "ga", "bpso"} <= set(e5b.method)
     assert (out / "e5c_overlap_k10.csv").exists()
+    # v3.1.6: --redo-methods l1_lr -> E4/E5a của l1_lr chọn lại, f_test giữ nguyên
+    g_before = pd.read_csv(out / "e4_selected_genes.csv")
+    s.main(["--datasets", COHORT, "--methods", "l1_lr", "--redo-methods", "l1_lr", "--k", "2", "5", "10", "--m", "4",
+            "--fractions", "0.5", "0.7", "--prefilter", "120", "--skip-e5b", "--n-jobs", "1"])
+    g_after = pd.read_csv(out / "e4_selected_genes.csv")
+    assert len(g_after) == len(g_before) and set(g_after.method) == set(g_before.method)
+    key = ["fraction", "subsample", "method", "k", "rank"]
+    pd.testing.assert_frame_equal(g_before[g_before.method == "f_test"].sort_values(key).reset_index(drop=True),
+                                  g_after[g_after.method == "f_test"].sort_values(key).reset_index(drop=True))
+    stab2 = pd.read_csv(out / "e4_stability.csv")
+    assert len(stab2) == len(stab) and json.loads((out / "config.json").read_text(encoding="utf-8"))["redo_methods"] == ["l1_lr"]
 
 
 def test_07_tables_and_sanity(data_root):

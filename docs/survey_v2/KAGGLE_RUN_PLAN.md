@@ -1,4 +1,9 @@
-# Chạy survey v3 trên Kaggle — kế hoạch phiên (sau QĐ21 + QĐ22, 29/10/2026)
+# Chạy survey v3 trên Kaggle — kế hoạch phiên (sau QĐ21 + QĐ22, 29/10/2026; cập nhật v3.1.6, 31/10/2026)
+
+> **Cập nhật 31/10 (Review 31/10, QĐ25–QĐ28).** Đợt 1 đã xong (17 phiên). Việc còn lại, theo thứ tự: `redo_svm_rfe_A` → `redo_svm_rfe_B`
+> (notebook `kaggle_redo_svm_rfe.ipynb`; chỉ chọn lại SVM-RFE) → `e2_ref` **chạy lại** → `e3_p1`, `e3_p2`, `e3_p3` **chạy lại** → `e2e3_merge`
+> → `ablation_phaseB` → `tables`. Các phiên `e2_ref`, `e3_p2`, `e3_p3` ngày 29–30/10 không dùng được (QĐ27: tracemalloc khi đo thời gian;
+> bộ nhớ tiến trình con kế thừa từ cha). Mọi phiên mới dùng `REPO_COMMIT` = commit v3.1.6 đã push.
 
 Mỗi thí nghiệm có **một notebook riêng** trong `notebooks/kaggle/` (sinh từ runner chung bằng `scripts/make_kaggle_notebooks.py`,
 không sửa tay). Mỗi phiên Kaggle (Save Version → Run All) chạy **một việc** (`JOB`) thuộc notebook đó; lệnh, chia shard, đầu vào
@@ -15,6 +20,7 @@ cần khôi phục và kiểm tra đầu ra nằm trong `scripts/kaggle_jobs.py`
 | `kaggle_E6_tables.ipynb` | E6 + bảng, hình | `tables` |
 | `kaggle_E7_transfer.ipynb` | E7 | `e7` |
 | `kaggle_ablation_no_IHC.ipynb` | Ablation không IHC | `ablation_phaseA_geo`, `ablation_phaseA_tcga`, `ablation_phaseB` |
+| `kaggle_redo_svm_rfe.ipynb` | Chọn lại SVM-RFE (v3.1.6) | `redo_svm_rfe_A`, `redo_svm_rfe_B` |
 
 Notebook chung `notebooks/kaggle_survey_v3_runner.ipynb` vẫn chạy được mọi JOB và là khuôn cho 9 notebook trên: sửa logic chung ở
 runner rồi chạy `python scripts/make_kaggle_notebooks.py` (test `--check` báo lỗi nếu quên). Muốn chạy song song hai JOB của cùng một
@@ -78,6 +84,18 @@ và E3 từ các phần.
 | sau mỗi đợt | `tables` | mọi zip | < 0,5 h | hoặc tải các zip về máy rồi `python scripts/make_survey_tables.py` |
 | 4 · 10/11 | `ablation_phaseA_geo`, `ablation_phaseA_tcga`, `ablation_phaseB` | | | loại 4 gen IHC (khoá luận, ưu tiên 2) |
 
+Sau đợt 1 (v3.1.6, 31/10):
+
+| Hạn | Phiên (JOB) | Khôi phục | Ước lượng | Ghi chú |
+|---|---|---|---|---|
+| 04/11 | `redo_svm_rfe_A` | `e1_phaseA_geo`, `e1_phaseB_tcga`, `ablation_phaseA_geo`, `ablation_phaseA_tcga` | ~1 h | cần `checkpoints/` của pha A trong zip |
+| 04/11 | `redo_svm_rfe_B` | `redo_svm_rfe_A`, `e1_phaseB_wrappers`, `e1_phaseB_geo`, `e1_phaseB_tcga`, `fewshot_e1b`, `e4e5_gse37745`, `e4_tcga` | 2–3 h | pha B 5 bộ, E1b 4 cohort, E4/E5 2 bộ — chỉ svm_rfe |
+| 04/11 | `e2_ref` (lần 2) | — | ~3 h | **một mình**; thay phiên 30/10 |
+| 06/11 | `e3_p1`, `e3_p2`, `e3_p3` (lần 2) | `e2_ref` lần 2 | 2 / 4–5 / 1,5–2 h | mỗi phiên một mình, cùng loại máy |
+| 06/11 | `e2e3_merge` | `e2_ref` lần 2 + 3 phiên E3 | phút | từ chối phiên đo ở bản cũ |
+| 06/11 | `ablation_phaseB` | `redo_svm_rfe_A` | 3–6 h | |
+| 06/11 | `tables` | mọi zip mới nhất | < 0,5 h | bảng/hình chính thức |
+
 Đợt 1 nộp 03/11: E0, E1 bốn cohort GEO (pha A + B), E2 tham chiếu; phần TCGA của E1 chậm nhất 04/11 (QĐ22b). Không kịp phần GEO
 → báo GVHD trước 02/11.
 
@@ -86,3 +104,5 @@ và E3 từ các phần.
 - Notebook in `JOB_OK <job>`: mọi `config.json` đầu ra có `traceable = true`, `commit_hash = HEAD`, và (E2/E3) `calibration_ok` không `false`.
 - `run_info_<JOB>.json` trong zip: commit, mã thoát, giờ chạy, zip đã khôi phục — chép vào HANDOVER.
 - Chỉ kết quả từ phiên có `JOB_OK` mới được trích (kết quả 26–28/10 chỉ để ước lượng chi phí, M19).
+- v3.1.6: `logs/pip_freeze_<JOB>.txt` trong zip = môi trường thật của phiên (Kaggle: Python 3.13.15, numpy 2.1.3, scikit-learn 1.6.1 —
+  khác `requirements.txt`); người viết lấy phiên bản từ đây. `config.json` có `resumed_from` khi phiên tiếp tục kết quả của commit khác.

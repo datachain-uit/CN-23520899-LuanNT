@@ -17,6 +17,8 @@ E5c: chồng lấn Jaccard giữa các phương pháp ở k = OVERLAP_K (10) t�
 Đầu ra: results/survey_v2/E4_E5/<bộ>/{subsamples.csv, e4_selected_genes.csv, e4_stability.csv, e5a_selected_genes.csv,
 e5a_redundancy.csv, e5b_seed_runs.csv, e5b_seed_stability.csv, e5c_overlap_k10.csv, config.json}. Chạy lại sẽ bỏ qua
 các (fraction, subsample, method) đã có trong e4_selected_genes.csv / e5a_selected_genes.csv (resume).
+v3.1.6 (QĐ25): --redo-methods M ... bỏ dòng của các phương pháp này trong e4_selected_genes.csv, e4_select_times.csv,
+e5a_selected_genes.csv, e5a_redundancy_per_subsample.csv (và e5b_* nếu phương pháp thuộc E5b) rồi chọn lại; E5c tính lại từ pha A.
 """
 
 from __future__ import annotations
@@ -38,8 +40,9 @@ from survey_v2.classify import evaluate_panel  # noqa: E402
 from survey_v2.data import (add_correlated_copies, load_dataset, repeated_patient_splits, stratified_subsample,  # noqa: E402
                             variance_prefilter)
 from survey_v2.methods import random_panel, select  # noqa: E402
-from survey_v2.runlog import DATA_ROOT, all_versions, results_dir, start_run, write_config  # noqa: E402
+from survey_v2.runlog import DATA_ROOT, all_versions, previous_config, results_dir, start_run, write_config  # noqa: E402
 from survey_v2.stability import kuncheva_index, mean_jaccard, nogueira, overlap_matrix, selections_to_matrix  # noqa: E402
+from scripts.run_e1_classification import drop_rows_of_methods  # noqa: E402
 
 COHORT_ID = {name: i for i, name in enumerate(C.DATASETS)}
 METHOD_ID = dict(C.METHOD_ID)
@@ -65,6 +68,7 @@ def parse_args(argv=None):
     ap.add_argument("--e1-wrapper-dir", default="E1_wrapper_feature_selection")
     ap.add_argument("--n-jobs", type=int, default=1)
     ap.add_argument("--out", default="E4_E5")
+    ap.add_argument("--redo-methods", nargs="+", default=None, help="v3.1.6: bỏ dòng cũ của các phương pháp này rồi chọn lại")
     return ap.parse_args(argv)
 
 
@@ -370,8 +374,16 @@ def main(argv=None, script=__file__) -> None:
         ds = load_dataset(DATA_ROOT, name)
         out = results_dir(args.out, name)
         print(f"[{name}] {ds.n} mẫu × {ds.p} gen", flush=True)
+        prev_cfg = previous_config(out)
+        if args.redo_methods:
+            n_drop = drop_rows_of_methods([out / f for f in ("e4_selected_genes.csv", "e4_select_times.csv", "e5a_selected_genes.csv",
+                                                             "e5a_redundancy_per_subsample.csv", "e5b_seed_runs.csv", "e5b_selected_genes.csv")],
+                                          args.redo_methods)
+            print(f"[{name}] --redo-methods {args.redo_methods}: đã bỏ {n_drop} dòng cũ, sẽ chọn lại", flush=True)
         info = {"experiment": "E4_E5", "dataset": name, "n_samples": ds.n, "n_genes": ds.p, "k_grid": args.k,
                 "methods": args.methods + ["random_k"], "prefilter_p0": args.prefilter,
+                "redo_methods": list(args.redo_methods or []),
+                "rows_reused_from_commit": (prev_cfg or {}).get("commit_hash") if args.redo_methods else None,
                 "subsample_seed": "default_rng([cohort_id, 4, fraction_index, subsample])",
                 "stability_universe": "gene space G of the dataset (prefilter is inside each subsample)", "gene_space": ds.notes,
                 "role": C.DATASETS.get(name),

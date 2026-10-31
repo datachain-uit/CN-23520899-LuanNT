@@ -18,6 +18,11 @@ Quy ước chia shard:
 * Pha B, E1b, E7, E4/E5 ghi nối tiếp (append) theo bộ dữ liệu -> chỉ song song khác bộ; trong một bộ dùng --n-jobs của script.
 * E2/E3 đo thời gian: `exclusive` (một tiến trình, không chạy gì khác cùng phiên; BLAS 1 luồng do script tự đặt).
 * Mọi script tự tiếp tục khi chạy lại -> phiên Kaggle quá 12 giờ: lưu output, gắn làm Input, chạy lại cùng JOB.
+
+v3.1.6 (Review 31/10/2026, QĐ25–QĐ28): (1) việc `redo_svm_rfe_A` / `redo_svm_rfe_B` chọn lại và đánh giá lại SVM-RFE
+(random_state) ở E1 pha A/B, ablation A, E1b, E4/E5 bằng --redo-methods, giữ nguyên mọi phương pháp khác; (2) `e2_ref`,
+`e3_p1..p3`, `e2e3_merge` chạy lại ở bản này (tracemalloc và bộ nhớ tiến trình con — survey_v2/timing.py); (3) `requires`
+cho e4e5/e4_tcga/e7/tables; (4) merge-e2e3 bỏ qua tệp CSV rỗng; (5) mỗi lần `run` ghi `logs/pip_freeze_<JOB>.txt`.
 """
 
 from __future__ import annotations
@@ -84,8 +89,8 @@ def build_jobs() -> dict[str, Job]:
     J.append(Job("e1_phaseB_geo", "1 · 03/11", "E1 pha B, 4 cohort GEO: LR-L2 (+RF, SVM ở k ∈ {5, 25}), B0, random-k",
                  [_clf("--datasets", d, "--secondary") for d in GEO], [f"E1_classification/{d}" for d in GEO],
                  requires=[f"E1_feature_selection/{d}/selected_genes.csv" for d in GEO], restore_from=["e1_phaseA_geo"], hours="1–2"))
-    J.append(Job("e2_ref", "1 · 03/11", "E2 phiên tham chiếu = E2 chính thức (13 phương pháp trong MỘT phiên; calibration.csv; "
-                 "bộ nhớ đỉnh trong tiến trình con; không E3)",
+    J.append(Job("e2_ref", "2 · 06/11", "E2 phiên tham chiếu = E2 chính thức (13 phương pháp trong MỘT phiên; calibration.csv; "
+                 "bộ nhớ đỉnh trong tiến trình con; không E3) — CHẠY LẠI ở v3.1.6 (QĐ27: thời gian không tracemalloc, bộ nhớ VmHWM)",
                  [["scripts/run_survey_e2_e3_timing.py", "--wrappers", "--isolate-memory", "--skip-e3", "--out", "E2_E3_ref"]],
                  ["E2_E3_ref"], parallel=1, exclusive=True, hours="6–9"))
     # ----------------------------------------------------------------- Đợt 1 phần TCGA (04/11)
@@ -95,7 +100,8 @@ def build_jobs() -> dict[str, Job]:
                  [_fs("--datasets", TCGA, "--repeats", str(r)) for r in (3, 4)], [], hours="5–8"))
     J.append(Job("e1_phaseB_tcga", "1T · 04/11", "Gộp pha A TCGA (5 lần lặp) rồi pha B TCGA",
                  [_clf("--datasets", TCGA, "--secondary")], [f"E1_feature_selection/{TCGA}", f"E1_classification/{TCGA}"],
-                 finalize=[], parallel=1, restore_from=["e1_phaseA_tcga_r012", "e1_phaseA_tcga_r34"], hours="3–6"))
+                 finalize=[], parallel=1, restore_from=["e1_phaseA_tcga_r012", "e1_phaseA_tcga_r34"],
+                 requires=[f"E1_feature_selection/{TCGA}/checkpoints/repeat_{r}_fold_0_f_test.genes.csv" for r in (0, 3)], hours="3–6"))
     # gộp pha A chạy TRƯỚC pha B (cùng tiến trình tuần tự)
     J[-1].shards = [_fs("--datasets", TCGA), J[-1].shards[0]]
     # ----------------------------------------------------------------- Đợt 2 (06/11): E1b, E3, E4 + E5
@@ -116,11 +122,13 @@ def build_jobs() -> dict[str, Job]:
     J.append(Job("e4e5_gse37745", "2 · 06/11", "E4 (M = 30) + E5a + E5b + E5c trên GSE37745 (+GA, BPSO ở k = 10); "
                  "chạy lại sau wrap_gse37745 để E5c có GA/BPSO (phần đã có được bỏ qua)",
                  [["scripts/run_survey_e4_e5_stability.py", "--datasets", "gse37745", "--wrappers", "--n-jobs", "4"]],
-                 ["E4_E5/gse37745"], parallel=1, restore_from=["e1_phaseA_geo"],
+                 ["E4_E5/gse37745"], parallel=1, restore_from=["e1_phaseA_geo", "wrap_gse37745"],
+                 requires=["E1_feature_selection/gse37745/selected_genes.csv", "E1_wrapper_feature_selection/gse37745/selected_genes.csv"],
                  hours="4–8"))
     J.append(Job("e4_tcga", "2 · 06/11", "E4 (M = 30) + E5c trên TCGA (+GA, BPSO ở k = 10); quá 12 giờ thì chạy lại, tự tiếp tục",
                  [["scripts/run_survey_e4_e5_stability.py", "--datasets", TCGA, "--wrappers", "--skip-e5a", "--skip-e5b", "--n-jobs", "4"]],
-                 [f"E4_E5/{TCGA}"], parallel=1, restore_from=["e1_phaseB_tcga"], hours="6–11"))
+                 [f"E4_E5/{TCGA}"], parallel=1, restore_from=["e1_phaseB_tcga"],
+                 requires=[f"E1_feature_selection/{TCGA}/selected_genes.csv"], hours="6–11"))
     # ----------------------------------------------------------------- Đợt 3 (08/11): wrapper, E7
     for d in GPL570:
         J.append(Job(f"wrap_{d}", "3 · 08/11", f"E1 pha A wrapper GA + BPSO, {d}, lần lặp 0–2, k ∈ {{5, 10, 50}}",
@@ -137,9 +145,32 @@ def build_jobs() -> dict[str, Job]:
                  [["scripts/run_survey_e7_transfer_naive.py", "--n-jobs", "4"]], [f"E7/{d}" for d in GEO], parallel=1, hours="2–4"))
     J.append(Job("tables", "sau mỗi đợt", "Bảng, hình, provenance_manifest (E6 ghép tại k = 10)",
                  [["scripts/make_survey_tables.py"]], ["tables"], parallel=1,
+                 requires=[f"E1_classification/{d}/classification_per_fold.csv" for d in C.DATASETS] + [f"E0/{d}/e0_signal_check.csv" for d in C.DATASETS],
                  restore_from=["(mọi việc đã xong)"], hours="<0,5"))
-    # ----------------------------------------------------------------- Ablation loại 4 gen IHC (09–10/11, khoá luận)
+    # ----------------------------------------------------------------- v3.1.6: chọn lại SVM-RFE (QĐ25; random_state) — 02–04/11
     abl = ["--exclude-genes", *IHC_GENES, "--out", "E1_feature_selection_noIHC"]
+    redo = ["--redo-methods", "svm_rfe"]
+    J.append(Job("redo_svm_rfe_A", "R · 04/11", "SVM-RFE chọn lại (random_state, QĐ25): E1 pha A 5 bộ + ablation pha A 5 bộ; "
+                 "phương pháp khác lấy từ checkpoint đã khôi phục",
+                 [_fs("--datasets", d, *redo) for d in C.DATASETS] + [_fs("--datasets", d, *abl, *redo) for d in C.DATASETS],
+                 [f"E1_feature_selection/{d}" for d in C.DATASETS] + [f"E1_feature_selection_noIHC/{d}" for d in C.DATASETS],
+                 requires=[f"E1_feature_selection/{d}/checkpoints/repeat_0_fold_0_f_test.genes.csv" for d in C.DATASETS]
+                 + [f"E1_feature_selection_noIHC/{d}/checkpoints/repeat_0_fold_0_f_test.genes.csv" for d in C.DATASETS],
+                 restore_from=["e1_phaseA_geo", "e1_phaseB_tcga", "ablation_phaseA_geo", "ablation_phaseA_tcga"], parallel=4, hours="~1"))
+    J.append(Job("redo_svm_rfe_B", "R · 04/11", "SVM-RFE đánh giá lại (QĐ25): E1 pha B 5 bộ (+RF, SVM ở k ∈ {5, 25}), E1b 4 cohort, "
+                 "E4/E5 2 bộ (E5c tính lại); các dòng khác giữ nguyên",
+                 [_clf("--datasets", d, "--secondary", "--no-references", "--methods", "svm_rfe", *redo) for d in C.DATASETS]
+                 + [["scripts/run_survey_e1b_learning_curve.py", "--datasets", d, "--methods", "svm_rfe", *redo, "--n-jobs", "2"] for d in GEO]
+                 + [["scripts/run_survey_e4_e5_stability.py", "--datasets", "gse37745", "--methods", "svm_rfe", "--wrappers", *redo, "--n-jobs", "2"],
+                    ["scripts/run_survey_e4_e5_stability.py", "--datasets", TCGA, "--methods", "svm_rfe", "--wrappers", "--skip-e5a", "--skip-e5b",
+                     *redo, "--n-jobs", "2"]],
+                 [f"E1_classification/{d}" for d in C.DATASETS] + [f"E1b/{d}" for d in GEO] + ["E4_E5/gse37745", f"E4_E5/{TCGA}"],
+                 requires=[f"E1_feature_selection/{d}/selected_genes.csv" for d in C.DATASETS]
+                 + [f"E1_classification/{d}/classification_per_fold.csv" for d in C.DATASETS]
+                 + [f"E1b/{d}/e1b_per_run.csv" for d in GEO] + ["E4_E5/gse37745/e4_selected_genes.csv", f"E4_E5/{TCGA}/e4_selected_genes.csv"],
+                 restore_from=["redo_svm_rfe_A", "e1_phaseB_wrappers", "e1_phaseB_geo", "e1_phaseB_tcga", "fewshot_e1b", "e4e5_gse37745", "e4_tcga"],
+                 parallel=3, hours="2–3"))
+    # ----------------------------------------------------------------- Ablation loại 4 gen IHC (09–10/11, khoá luận)
     J.append(Job("ablation_phaseA_geo", "4 · 10/11", "Ablation không IHC: pha A 4 cohort GEO", [_fs("--datasets", d, *abl) for d in GEO],
                  [f"E1_feature_selection_noIHC/{d}" for d in GEO], hours="3–6"))
     J.append(Job("ablation_phaseA_tcga", "4 · 10/11", "Ablation không IHC: pha A TCGA (5 lần lặp, 4 tiến trình)",
@@ -234,6 +265,19 @@ def run_parallel(cmds: list[list[str]], max_parallel: int, log_dir: Path, tag: s
     return [codes[i] for i in sorted(codes)]
 
 
+def write_pip_freeze(job: Job, log_dir: Path) -> Path | None:
+    """v3.1.6: ghi `pip freeze` của môi trường chạy (Kaggle khác requirements.txt) để báo cáo đúng phiên bản."""
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        out = log_dir / f"pip_freeze_{job.name}.txt"
+        txt = subprocess.run([sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True, timeout=120).stdout
+        out.write_text(f"# python {sys.version.split()[0]}\n" + txt, encoding="utf-8")
+        return out
+    except Exception as exc:  # noqa: BLE001 — không được làm hỏng phiên vì bước ghi phụ
+        print(f"[pip freeze] bỏ qua: {exc}", flush=True)
+        return None
+
+
 def verify(job: Job, commit: str | None) -> list[str]:
     problems = []
     root = results_root()
@@ -254,6 +298,17 @@ def verify(job: Job, commit: str | None) -> list[str]:
 
 # ------------------------------------------------------------------------------------------------- E2/E3 merge
 E2E3_TABLES = ("e2_cost_point.csv", "e3_scaling_n.csv", "e3_scaling_p.csv", "e3_wrapper_evals.csv", "e3_exponents.csv")
+
+
+def _read_csv_or_none(path: Path):
+    """CSV -> DataFrame; None nếu thiếu hoặc rỗng (kể cả tệp chỉ có BOM + xuống dòng mà pandas báo EmptyDataError)."""
+    if not path.exists():
+        return None
+    try:
+        frame = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return None
+    return frame if len(frame) else None
 
 
 def merge_e2e3(parts=tuple(f"E2_E3_{p}" for p in E3_PARTS), ref: str = "E2_E3_ref", out_name: str = "E2_E3") -> Path:
@@ -279,6 +334,11 @@ def merge_e2e3(parts=tuple(f"E2_E3_{p}" for p in E3_PARTS), ref: str = "E2_E3_re
     commits = {c.get("commit_hash") for c in cfgs.values()}
     if len(commits) != 1:
         problems.append(f"các phần khác commit: {sorted(map(str, commits))}")
+    for p, cfg in cfgs.items():                                  # v3.1.6 (QĐ27): phiên đo ở bản cũ không được gộp
+        if cfg.get("timing_tracemalloc") is not False:
+            problems.append(f"{p}: đo thời gian ở bản trước v3.1.6 (tracemalloc bật) — chạy lại phiên này")
+        if p == ref and cfg.get("isolate_memory") and cfg.get("peak_source") != "VmHWM":
+            problems.append(f"{p}: bộ nhớ tiến trình con đo bằng ru_maxrss kế thừa (trước v3.1.6) — chạy lại phiên tham chiếu")
     if problems:
         raise SystemExit("KHÔNG gộp:\n  " + "\n  ".join(problems))
     prov = start_run(__file__, params={"merge": "e2e3", "ref": ref, "parts": list(parts)})
@@ -288,12 +348,14 @@ def merge_e2e3(parts=tuple(f"E2_E3_{p}" for p in E3_PARTS), ref: str = "E2_E3_re
         raise SystemExit(f"thiếu {ref_e2} (phiên tham chiếu phải đo E2)")
     e2 = pd.read_csv(ref_e2)
     e2.insert(0, "session", ref)
+    for col in ("peak_mb", "peak_mb_all", "maxrss_mb"):          # v3.1.6: cột tracemalloc / ru_maxrss của bản cũ không dùng
+        if col in e2.columns:
+            e2 = e2.drop(columns=col)
     e2.to_csv(out / "e2_cost_point.csv", index=False, encoding="utf-8-sig")
     part_e2 = []
     for p in parts:
-        f = root / p / "e2_cost_point.csv"
-        if f.exists() and f.stat().st_size > 3:
-            frame = pd.read_csv(f)
+        frame = _read_csv_or_none(root / p / "e2_cost_point.csv")
+        if frame is not None:
             frame.insert(0, "session", p)
             part_e2.append(frame)
     if part_e2:
@@ -302,9 +364,8 @@ def merge_e2e3(parts=tuple(f"E2_E3_{p}" for p in E3_PARTS), ref: str = "E2_E3_re
     for name in E2E3_TABLES[1:]:
         frames = []
         for p in parts:
-            f = root / p / name
-            if f.exists() and f.stat().st_size > 3:
-                frame = pd.read_csv(f)
+            frame = _read_csv_or_none(root / p / name)           # v3.1.6: tệp rỗng (chỉ BOM) -> bỏ qua
+            if frame is not None:
                 frame.insert(0, "session", p)
                 frames.append(frame)
         if frames:
@@ -324,8 +385,10 @@ def merge_e2e3(parts=tuple(f"E2_E3_{p}" for p in E3_PARTS), ref: str = "E2_E3_re
               "methods": {p: c.get("methods") for p, c in cfgs.items()}, "dataset": first.get("dataset"), "split": first.get("split"),
               "k": first.get("k"), "k_e3": first.get("k_e3"), "p_fixed": first.get("p_fixed"), "n_grid": cfgs[parts[0]].get("n_grid"),
               "p_grid": cfgs[parts[0]].get("p_grid"), "e3_max_p": cfgs[parts[0]].get("e3_max_p"), "repeats": first.get("repeats"),
-              "isolate_memory": first.get("isolate_memory"),
+              "isolate_memory": first.get("isolate_memory"), "peak_source": first.get("peak_source"),
+              "timing_tracemalloc": first.get("timing_tracemalloc", True),
               "note": "E2 = phiên tham chiếu (một phiên, mọi phương pháp); E3 = các phần đo ở phiên riêng, hiệu chuẩn với phiên tham chiếu (QĐ18); cột session ghi phần."}
+
     write_config(out, prov, merged)
     print("gộp xong:", out)
     return out
@@ -358,6 +421,7 @@ def cmd_run(job: Job, parallel: int | None, log_dir: Path, max_hours: float | No
     commit = head_commit()
     deadline = time.time() + max_hours * 3600 if max_hours else None
     print(f"JOB {job.name} | commit {commit} | data {data_root()} | giới hạn {max_hours or '—'} giờ", flush=True)
+    write_pip_freeze(job, log_dir)
     n_par = 1 if job.exclusive else (parallel or job.parallel)
     sequential = job.name == "e1_phaseB_tcga"      # gộp pha A rồi mới pha B
     codes = run_parallel([command(s) for s in job.shards], 1 if sequential else n_par, log_dir, job.name, deadline)

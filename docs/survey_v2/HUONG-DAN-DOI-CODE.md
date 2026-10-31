@@ -1,8 +1,35 @@
 # Hướng dẫn đội code — Thực nghiệm survey v3.1 (E0–E7, dùng chung với RQ1 khoá luận)
 
-Phiên bản 29/10/2026 (v3.1 = bản v3 của Review 26/10 ghép lên HEAD `2508a2a` của đội code, QĐ18–QĐ20 của Review 29/10).
+Phiên bản 31/10/2026 (v3.1.6; v3.1 = bản v3 của Review 26/10 ghép lên HEAD `2508a2a` của đội code, QĐ18–QĐ20 của Review 29/10;
+v3.1.1–v3.1.5 = QĐ21–QĐ24; v3.1.6 = QĐ25–QĐ28 của Review 31/10).
 Áp dụng cho gói `survey_v2/` + `scripts/` trên nhánh `survey-v2-code`. Người nhận: đội code (LuanNT). Người viết bài: GVHD.
 Mọi thắc mắc về *thiết kế* hỏi GVHD trước khi đổi code.
+
+---
+
+## v3.1.6 — sau đợt 1 (Review 31/10/2026, QĐ25–QĐ28): đọc trước, làm trong 02–06/11
+
+Đợt 1 (17 phiên, 29–30/10) được nghiệm thu về quy trình: mọi `config.json` traceable, đúng n sau QC, E0 đạt 5/5, sanity đạt.
+Khi đối chiếu số liệu GVHD phát hiện ba lỗi đo/tái lập **trong code GVHD giao** (không phải lỗi vận hành của đội code) và một
+lỗi vận hành nhỏ. Bản v3.1.6 sửa cả bốn; việc phải chạy lại được giới hạn tối đa.
+
+| # | Lỗi | Ảnh hưởng | Sửa trong v3.1.6 | Phải chạy lại |
+|---|---|---|---|---|
+| QĐ25 | `rank_svm_rfe` dùng `LinearSVC(dual="auto")` không `random_state`; p > n → bộ giải dual xáo trộn ngẫu nhiên → hai phiên cho hai panel (30/120 panel TCGA khác nhau, HANDOVER 31/10) | mọi kết quả svm_rfe (E1 A/B, E1b, E4/E5, ablation A) không tái lập; E4 của svm_rfe lẫn nhiễu bộ giải | `random_state = seed` (cả `svm_linear` pha B và LR fitness của wrapper: primal, tất định, chỉ để an toàn) | **chỉ svm_rfe**: `redo_svm_rfe_A` (pha A 5 bộ + ablation A) rồi `redo_svm_rfe_B` (pha B, E1b, E4/E5) với `--redo-methods svm_rfe` (≈ 3–4 giờ Kaggle) |
+| QĐ26 | abess 0.4.11 báo `OverflowError: The variable … is constant` khi ma trận có cột hằng (E3 p = toàn bộ gen TCGA: 418 gen hằng) | e3_p1 không chạy được ở p = 19.938 | `select_abess` bỏ cột sd = 0 rồi ánh xạ chỉ số về; `info["n_constant_dropped"]` | chỉ e3_p1 (đang thiếu) |
+| QĐ27 | (a) `measure()` bật `tracemalloc` trong lúc đo → wall time tăng tuỳ phương pháp (đo lại trên máy GVHD: ReliefF ×5,7; MI ×3,0; RF ×2,5; L1 ×1,1; F-test ×1,0). (b) `ru_maxrss` của tiến trình con **kế thừa đỉnh RSS của tiến trình cha** trên Linux → `maxrss_child_mb` = `maxrss_mb` của cha trong mọi dòng E2_E3_ref, `maxrss_isolated_mb` tăng đơn điệu (0 → 43,8 → 551 MB) | bảng E2 (thời gian + bộ nhớ) và số mũ E3 của e2_ref, e3_p2, e3_p3 **không được trích** (M19) | không tracemalloc; khởi động trên lát nhỏ; tiến trình con đo `VmHWM` (`peak_rss_mb()`); `merge-e2e3` từ chối phiên đo ở bản cũ | `e2_ref`, `e3_p1`, `e3_p2`, `e3_p3`, `e2e3_merge` (≈ 10–11 giờ, chạy song song 3–4 phiên) |
+| QĐ28 | `e4e5_gse37745`, `e4_tcga` không khai `requires` → E5c bị bỏ qua im lặng khi thiếu pha A (hai phiên "lan1-thieu-E5c"); `merge-e2e3` lỗi `EmptyDataError` với `e3_wrapper_evals.csv` rỗng (4 byte) | tốn 2 phiên; merge không chạy được | `requires` cho e4e5/e4_tcga/e7/tables; merge bỏ qua CSV rỗng; `run` ghi `logs/pip_freeze_<JOB>.txt`; `config.json` ghi `resumed_from` khi tiếp tục ở commit khác | không |
+
+**Không phải chạy lại:** E0, sanity, E1 pha A/B của 12 phương pháp còn lại và wrapper, E1b, E7, E4/E5 (trừ dòng svm_rfe), ablation A.
+Các zip đợt 1 là đầu vào khôi phục của các việc redo (xem `python scripts/kaggle_jobs.py show redo_svm_rfe_A`).
+
+**Áp gói.** Trên `survey-v2-code` tại `68e7c7d`: `git am --3way survey-v3.1.6-<hash>.patch`, `python -m pytest tests -q`
+(≈ 200 test + 7 test đầu-cuối, `-m "not slow"` ≈ 30 s), `python scripts/make_kaggle_notebooks.py --check`, push, rồi đặt `REPO_COMMIT`
+mới trong các notebook Kaggle. Notebook mới: `notebooks/kaggle/kaggle_redo_svm_rfe.ipynb`.
+
+**Thứ tự phiên (02–06/11):** (1) `redo_svm_rfe_A` → `redo_svm_rfe_B` (04/11); (2) `e2_ref` mới → `e3_p1`, `e3_p2`, `e3_p3` →
+`e2e3_merge` (06/11); (3) `ablation_phaseB` (khôi phục output `redo_svm_rfe_A`); (4) `tables` (sau cùng). Bảng/hình trích vào bài
+chỉ lấy từ `tables` chạy sau (1)–(3) và sau khi có `published_panels.csv` (quá hạn 31/10 — xem Review 31/10 mục 6).
 
 ---
 
@@ -356,6 +383,11 @@ v3.1.4 (QĐ23, 29/10): E2 chính thức = **phiên tham chiếu** (`e2_ref`: 13 
 chia phần chạy `--skip-e2` (chỉ hiệu chuẩn + E3) và được gộp bằng `kaggle_jobs.py merge-e2e3` (E2 từ phiên tham chiếu, E3 từ các phần;
 config.json của thư mục gộp stamp bằng provenance). `C.E3_MAX_P = {"elastic_net": 10000}`: Elastic Net (saga) đo tới p = 10.000 vì điểm
 p = 19.938 cần ≈ 5 giờ cho 3 lần đo và không vừa một phiên; bài ghi "đo tới p = 10.000", số mũ fit trên 4 điểm.
+v3.1.6 (QĐ27, 31/10): `measure()` không còn tracemalloc (wall time của ReliefF/MI/RF/wrapper trong các phiên 29–30/10 bị phóng đại
+2,5–5,7 lần); bộ nhớ tiến trình con đo bằng VmHWM (ru_maxrss kế thừa đỉnh của tiến trình cha → các cột `maxrss_*` cũ vô nghĩa);
+cột `peak_mb`, `maxrss_mb` bỏ. `merge-e2e3` từ chối phiên có `timing_tracemalloc != false` hoặc `peak_source != "VmHWM"`.
+**Mọi phiên E2/E3 chạy lại ở v3.1.6** (ước lượng sau khi bỏ tracemalloc: `e2_ref` ≈ 3 giờ, `e3_p1` ≈ 2 giờ, `e3_p2` ≈ 4–5 giờ (Elastic Net),
+`e3_p3` ≈ 1,5–2 giờ). Kết quả 29–30/10 chuyển vào 04_Luu-vet với ghi chú "KHÔNG DÙNG — QĐ27".
 
 ### 7.7 E4 + E5 — ổn định (việc #9): như bản 25/10 nhưng `--datasets` mặc định = TCGA, GSE37745; E5a và E5b chỉ GSE37745; E5b gồm
 rf_importance, stability_selection (mọi k) và GA, BPSO (k = 10); E5c ở k = 10 từ `selected_genes.csv` của pha A (+ wrapper). Random-k ở sàn
@@ -422,6 +454,15 @@ Checklist trước khi gửi:
 | 01–03/11 | E0 (5 bộ, v3.1); E1 pha A + B (5 bộ; TCGA pha A tái dùng nếu khớp); E2 trên Kaggle có hiệu chuẩn (QĐ18) | 03/11: bàn giao đợt 1 (E0, E1 không wrapper, E2); dời 04/11 nếu báo trước 02/11 |
 | 04–08/11 | E1b (4 tập con); E3; E4 + E5 (TCGA, GSE37745); E1 wrapper (3 cohort GPL570); E7; `make_survey_tables.py`; HANDOVER | 06/11: E1b, E3, E4–E6; 08/11: wrapper, E7 |
 | 09–10/11 | Bổ sung theo yêu cầu người viết; ablation loại 4 gen IHC (khoá luận): pha A và B với `--exclude-genes NKX2-1 TP63 NAPSA KRT5 --out E1_feature_selection_noIHC` / `--selection-roots .../E1_feature_selection_noIHC --out E1_classification_noIHC` | 10/11: RQ1 chốt |
+
+Cập nhật 31/10 (Review 31/10, sau đợt 1): đợt 1 đã xong 17 phiên (29–30/10, sớm hơn hạn 03/11). Lịch còn lại:
+
+| Ngày | Việc | Ghi chú |
+|---|---|---|
+| 02/11 | Áp v3.1.6, `pytest`, `make_kaggle_notebooks.py --check`, push; `published_panels.csv` (Girard 2016, Wilkerson 2013) + test đọc panel; chuyển e2_ref/e3_p2/e3_p3 cũ vào 04_Luu-vet | hạn `published_panels.csv` đã qua (31/10) |
+| 03–04/11 | `redo_svm_rfe_A` → `redo_svm_rfe_B`; `e2_ref` mới; `ablation_phaseB` | 04/11: HANDOVER đợt 1 bổ sung (svm_rfe) |
+| 05–06/11 | `e3_p1`, `e3_p2`, `e3_p3` (3 phiên song song, cùng loại máy với `e2_ref` mới) → `e2e3_merge`; `tables` | 06/11: bàn giao E2/E3 + bảng chính thức đợt 1–2 |
+| 07–08/11 | Dự phòng chạy lại phiên lệch hiệu chuẩn; bổ sung theo yêu cầu người viết | 08/11: đợt 3 (theo kế hoạch cũ đã xong sớm) |
 
 ---
 

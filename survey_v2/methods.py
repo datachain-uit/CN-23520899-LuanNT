@@ -12,6 +12,9 @@ Quy ước chung
   (bão hòa ≤ n_train), bổ sung theo thứ hạng F-test trên train và ghi `n_filled` (KBTN 5.1).
 * Chuẩn hóa z-score (fit trên train) được áp dụng TRƯỚC l1_lr, elastic_net, svm_rfe (M7).
 * Chỉ số trả về là chỉ số cột của ma trận đưa vào (ma trận đã lọc sơ bộ); người gọi ánh xạ về gen.
+* v3.1.6 (QĐ25, 31/10/2026): mọi bộ giải có ngẫu nhiên nhận `random_state = seed` — SVM-RFE dùng LinearSVC dual
+  (liblinear xáo trộn toạ độ) nên trước đây không tái lập giữa hai phiên; abess bỏ cột hằng (sd = 0) trước khi khớp
+  (OverflowError ở p = toàn bộ gen TCGA, QĐ26) và ánh xạ chỉ số về ma trận gốc.
 """
 
 from __future__ import annotations
@@ -106,17 +109,19 @@ def rank_rf_importance(X, y, seed: int = 0, n_trees: int = C.RF_N_TREES, n_jobs:
     return np.argsort(-rf.feature_importances_, kind="stable")
 
 
-def rank_svm_rfe(X, y, k_min: int, step: float = 0.1, C_svm: float = 1.0, **_) -> np.ndarray:
+def rank_svm_rfe(X, y, k_min: int, step: float = 0.1, C_svm: float = 1.0, seed: int = 0, **_) -> np.ndarray:
     """SVM-RFE (Guyon et al., 2002) với xếp hạng CHẶT: loại dần một tỉ lệ `step` gen có w² nhỏ nhất
     cho tới khi còn k_min gen; thứ tự loại (kèm w² trong mỗi lô) là xếp hạng ngược.
 
     X phải đã chuẩn hóa z-score trên train (M7). Trả về thứ tự đầy đủ, gen quan trọng nhất trước.
+    `seed` -> random_state của LinearSVC: khi p > n, dual="auto" chọn bộ giải dual của liblinear (xáo trộn toạ độ
+    ngẫu nhiên), không có random_state thì hai lần chạy cho hai xếp hạng khác nhau (QĐ25, v3.1.6).
     """
     p = X.shape[1]
     active = np.arange(p)
     removed_order: list[int] = []                      # ít quan trọng nhất trước
     while True:
-        svm = LinearSVC(C=C_svm, class_weight="balanced", dual="auto", max_iter=10000)
+        svm = LinearSVC(C=C_svm, class_weight="balanced", dual="auto", max_iter=10000, random_state=int(seed))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             svm.fit(X[:, active], y)
@@ -320,25 +325,38 @@ def rank_ktsp(X, y, k_max: int, **_) -> tuple[np.ndarray, dict]:
 
 
 def select_abess(X, y, k_list, seed: int = 0) -> Selection:
-    """L0 / best-subset logistic (abess; Zhu et al. 2020, 2022) với support_size = k cho từng k (X đã z-score)."""
+    """L0 / best-subset logistic (abess; Zhu et al. 2020, 2022) với support_size = k cho từng k (X đã z-score).
+
+    v3.1.6 (QĐ26): cột hằng (sd = 0 trên train; sau z-score là cột toàn 0) bị loại trước khi khớp — abess 0.4.11 báo
+    OverflowError khi ma trận có cột hằng (gặp ở E3, p = toàn bộ 19.938 gen TCGA: 418 gen hằng trong fold 0). Chỉ số
+    trả về vẫn là chỉ số cột của ma trận ĐƯA VÀO; `info["n_constant_dropped"]` ghi số cột đã loại. Ở p0 = 5.000 sau
+    lọc phương sai không có cột hằng nên kết quả E1/E1b/E4 không đổi.
+    """
     try:
         from abess import LogisticRegression as AbessLR
     except ImportError as exc:   # pragma: no cover
         raise ImportError("abess chưa cài: pip install abess (ghi 'không chạy' trong HANDOVER nếu không cài được)") from exc
-    panels, info = {}, {"exact": {}, "n_filled": {}}
+    X = np.asarray(X)
+    keep = np.flatnonzero(X.std(axis=0, ddof=0) > 0)
+    n_constant = X.shape[1] - len(keep)
+    Xk = X if n_constant == 0 else X[:, keep]
+    panels, info = {}, {"exact": {}, "n_filled": {}, "n_constant_dropped": int(n_constant)}
     for k in sorted(int(k) for k in k_list):
+        if k > Xk.shape[1]:
+            raise ValueError(f"abess: k = {k} lớn hơn số gen không hằng ({Xk.shape[1]})")
         m = AbessLR(support_size=int(k))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            m.fit(X, y)
+            m.fit(Xk, y)
         coef = np.ravel(m.coef_)
         sel = np.flatnonzero(coef != 0)
         sel = sel[np.argsort(-np.abs(coef[sel]), kind="stable")]
         exact = len(sel) == k
         if len(sel) > k:
             sel = sel[:k]
-        sel, n_filled = _fill_with_ftest(np.asarray(sel, dtype=int), k, X, y)
-        panels[k] = np.sort(sel[:k])
+        sel, n_filled = _fill_with_ftest(np.asarray(sel, dtype=int), k, Xk, y)
+        sel = sel[:k] if n_constant == 0 else keep[sel[:k]]        # ánh xạ về chỉ số của ma trận đưa vào
+        panels[k] = np.sort(sel)
         info["exact"][k], info["n_filled"][k] = bool(exact), n_filled
         assert len(panels[k]) == k
     return Selection(method="abess", panels=panels, info=info)
@@ -387,7 +405,7 @@ def select(method: str, X_tr: np.ndarray, y_tr: np.ndarray, k_list, seed: int = 
     elif method == "rf_importance":
         order = rank_rf_importance(X_use, y_tr, seed=seed, n_jobs=n_jobs)
     elif method == "svm_rfe":
-        order = rank_svm_rfe(X_use, y_tr, k_min=1)
+        order = rank_svm_rfe(X_use, y_tr, k_min=1, seed=seed)
     elif method == "stability_selection":
         order, extra = rank_stability_selection(X_use, y_tr, k_max=k_max, seed=seed)
         return Selection(method=method, panels=prefix_panels(order, ks), ranking=np.asarray(order, dtype=int),

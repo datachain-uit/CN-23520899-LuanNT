@@ -69,6 +69,9 @@ Notebook chạy trên Kaggle/Colab: clone kho ở đúng commit rồi dùng `scr
 v3.1 = gói v3 (26/10) ghép lên HEAD `2508a2a` của đội code: giữ `dataset_path()`, `dataset_seed_id()`, `build_v3_splits.py`
 (phần few-shot sửa thành 4 tập con lồng nhau), layout Kaggle `experiment-data-geo-target/gse30219`; thêm `KLTN_STRICT_N`.
 Chi tiết và việc phải làm trước: mục "v3.1" đầu `docs/survey_v2/HUONG-DAN-DOI-CODE.md`.
+v3.1.6 (31/10/2026, QĐ25–QĐ28, sau đợt 1): SVM-RFE có `random_state` (chọn lại bằng `--redo-methods svm_rfe`, việc `redo_svm_rfe_A/B`);
+abess bỏ cột hằng; đo thời gian E2/E3 không tracemalloc và bộ nhớ tiến trình con bằng VmHWM (E2/E3 chạy lại); `requires` cho E4/E5;
+`merge-e2e3` bỏ qua CSV rỗng. Mục "v3.1.6" đầu HUONG-DAN-DOI-CODE.md.
 
 Bài survey theo cùng bài toán với khoá luận (LUAD vs LUSC; nguồn TCGA + 4 cohort GEO). Bộ thực nghiệm nằm trong `survey_v2/`
 và `scripts/`; hướng dẫn đầy đủ (mục đích từng thí nghiệm, lệnh, đầu ra, tiêu chí chấp nhận, bàn giao) ở

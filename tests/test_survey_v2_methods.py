@@ -123,3 +123,75 @@ def test_subsample_and_copies(toy):
         r = np.corrcoef(X2[:, s], X2[:, c])[0, 1]
         assert r > 0.75
         assert genes2[c].startswith(genes[s] + "__copy_rho")
+
+
+# ---------------------------------------------------------------------------------------------------
+# v3.1.6 (Review 31/10/2026): tái lập SVM-RFE (QĐ25), abess với cột hằng (QĐ26), bộ nhớ tiến trình con (QĐ27)
+# ---------------------------------------------------------------------------------------------------
+def test_svm_rfe_is_reproducible_with_seed_when_p_gt_n():
+    """p > n -> LinearSVC(dual='auto') dùng bộ giải dual (ngẫu nhiên); random_state = seed phải cho cùng xếp hạng."""
+    rng = np.random.default_rng(3)
+    n, p = 40, 300
+    y = np.array([0, 1] * (n // 2))
+    X = rng.normal(size=(n, p))
+    X[:, :4] += 0.8 * y[:, None]
+    a = select("svm_rfe", X, y, [5, 20], seed=7)
+    b = select("svm_rfe", X, y, [5, 20], seed=7)
+    assert a.panels[20].tolist() == b.panels[20].tolist() and a.ranking.tolist() == b.ranking.tolist()
+    c = select("svm_rfe", X, y, [5, 20], seed=8)
+    assert len(c.panels[20]) == 20                       # seed khác vẫn hợp lệ (có thể khác xếp hạng)
+
+
+def test_abess_drops_constant_genes_and_maps_indices_back():
+    pytest.importorskip("abess")
+    rng = np.random.default_rng(5)
+    n, p = 80, 60
+    y = np.array([0, 1] * (n // 2))
+    X = rng.normal(size=(n, p))
+    X[:, :3] += 1.5 * y[:, None]
+    const_cols = [4, 10, 59]
+    X[:, const_cols] = 7.0                               # cột hằng (sd = 0): abess 0.4.11 báo OverflowError nếu đưa vào
+    sel = select("abess", X, y, [2, 5], seed=0)
+    assert sel.info["n_constant_dropped"] == 3
+    for k in (2, 5):
+        assert len(sel.panels[k]) == k and not (set(sel.panels[k]) & set(const_cols))
+        assert sel.panels[k].max() < p
+    assert len(set(sel.panels[5]) & {0, 1, 2}) >= 2        # gen tín hiệu vẫn được chọn (chỉ số đã ánh xạ đúng)
+    plain = select("abess", X[:, [j for j in range(p) if j not in const_cols]], y, [5], seed=0)
+    kept = np.array([j for j in range(p) if j not in const_cols])
+    assert sorted(kept[plain.panels[5]].tolist()) == sorted(sel.panels[5].tolist())   # giống kết quả trên ma trận đã bỏ cột hằng
+
+
+def test_child_peak_rss_does_not_inherit_parent_peak():
+    """QĐ27: ru_maxrss của tiến trình con kế thừa đỉnh RSS của cha (Linux); peak_rss_mb() phải là của chính tiến trình con."""
+    import json
+    import subprocess
+    import sys
+    from survey_v2.timing import peak_rss_mb
+    big = np.ones((64, 1_000_000))                      # ~ 512 MB trong tiến trình cha
+    parent_peak = peak_rss_mb()
+    assert parent_peak > 400 and big.shape[0] == 64
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); from survey_v2.timing import peak_rss_mb, _maxrss_mb; "
+            "print(json.dumps({'peak': peak_rss_mb(), 'ru': _maxrss_mb()}))")
+    import survey_v2
+    repo = str(__import__("pathlib").Path(survey_v2.__file__).resolve().parents[1])
+    res = subprocess.run([sys.executable, "-c", code, repo], capture_output=True, text=True, check=True)
+    child = json.loads(res.stdout.strip().splitlines()[-1])
+    assert child["peak"] < 200, child                   # tiến trình con chỉ nạp numpy: vài chục MB
+    if sys.platform.startswith("linux"):
+        assert child["ru"] >= parent_peak * 0.9, child  # minh hoạ lỗi cũ: ru_maxrss của con ≈ đỉnh của cha
+
+
+def test_measure_reports_time_without_tracemalloc(toy):
+    from survey_v2.timing import measure
+    X, y = toy
+    calls = []
+
+    def sel(Xs, ys, k):
+        calls.append(Xs.shape)
+        return np.arange(k)
+
+    r = measure(sel, X, y, 5, repeats=2)
+    assert r["repeats"] == 2 and len(r["wall_s_all"]) == 2 and r["wall_s"] >= 0
+    assert "peak_mb" not in r and "maxrss_mb" not in r
+    assert calls[0][0] <= 40 and calls[0][0] < X.shape[0] and calls[1] == X.shape   # khởi động trên lát nhỏ rồi đo trên dữ liệu đủ

@@ -51,7 +51,8 @@ def _make(classifier: str, c: float | None, seed: int, n_jobs: int):
         return ("scale", LogisticRegression(C=c, class_weight="balanced", solver="liblinear", max_iter=5000,
                                             random_state=seed))
     if classifier == "svm_linear":
-        return ("scale", LinearSVC(C=c, class_weight="balanced", dual="auto", max_iter=10000))
+        return ("scale", LinearSVC(C=c, class_weight="balanced", dual="auto", max_iter=10000,
+                                   random_state=seed))   # v3.1.6: k < n -> primal (tất định); random_state để an toàn
     if classifier == "rf":
         return (None, RandomForestClassifier(n_estimators=C.RF_N_TREES, class_weight="balanced_subsample",
                                              random_state=seed, n_jobs=n_jobs))

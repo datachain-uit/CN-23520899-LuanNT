@@ -32,6 +32,7 @@ class InnerCVFitness:
                  C_lr: float = C.WRAPPER_FITNESS_C):
         self.X, self.y = X, y
         self.C_lr = C_lr
+        self.seed = int(seed)
         cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
         self.folds = list(cv.split(np.zeros(len(y)), y))
         self.n_eval = 0
@@ -46,7 +47,8 @@ class InnerCVFitness:
         scores = []
         for tr, va in self.folds:
             sc = StandardScaler().fit(Xs[tr])
-            m = LogisticRegression(C=self.C_lr, class_weight="balanced", solver="liblinear", max_iter=5000)
+            m = LogisticRegression(C=self.C_lr, class_weight="balanced", solver="liblinear", max_iter=5000,
+                                   random_state=self.seed)   # v3.1.6: primal L2-LR tất định; random_state để an toàn
             m.fit(sc.transform(Xs[tr]), self.y[tr])
             scores.append(roc_auc_score(self.y[va], m.decision_function(sc.transform(Xs[va]))))
         val = float(np.mean(scores))

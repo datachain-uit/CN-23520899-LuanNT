@@ -79,10 +79,13 @@ EXPERIMENTS = [
         "**Đo thời gian:** mỗi phiên chạy **một mình** (không chạy notebook khác cùng lúc trên cùng phiên), Accelerator None, "
         "cùng loại máy CPU 4 nhân với phiên `e2_ref`. Nghiệm thu: `calibration_ok` không `false`.",
         ["e2_ref", "e3_p1", "e3_p2", "e3_p3", "e2e3_merge"],
-        "1. **Đợt 1 (03/11):** `e2_ref`.\n"
-        "2. **Đợt 2 (06/11):** `e3_p1`, `e3_p2`, `e3_p3` — mỗi phiên khôi phục output `e2_ref`; chạy lần lượt hoặc song song ở các "
+        "**v3.1.6 (QĐ27, 31/10):** các phiên `e2_ref`, `e3_p2`, `e3_p3` ngày 29–30/10 đo ở bản có tracemalloc bật và bộ nhớ tiến trình "
+        "con kế thừa từ cha → KHÔNG dùng được (chuyển vào 04_Luu-vet); `merge-e2e3` từ chối phiên đo ở bản cũ. Chạy lại cả bốn "
+        "phiên ở commit v3.1.6, cùng loại máy (Intel Xeon 2,20 GHz như phiên 30/10).\n\n"
+        "1. `e2_ref` (đợt 2, 06/11; ≈ 3 giờ).\n"
+        "2. `e3_p1`, `e3_p2`, `e3_p3` — mỗi phiên khôi phục output `e2_ref` MỚI; chạy lần lượt hoặc song song ở các "
         "phiên Kaggle riêng (mỗi phiên vẫn một mình trong máy của nó).\n"
-        "3. `e2e3_merge` — khôi phục output 3 phiên E3 (vài phút; có thể chạy trên máy)."),
+        "3. `e2e3_merge` — khôi phục output `e2_ref` + 3 phiên E3 (vài phút; có thể chạy trên máy)."),
     Experiment(
         "kaggle_E4_E5_stability.ipynb", "E4 + E5 — ổn định chọn gen (TCGA, GSE37745)",
         "E4 (M = 30 tập con) trên TCGA và GSE37745; E5a dư thừa, E5b nhạy seed (rf_importance, stability_selection mọi k; GA, BPSO "
@@ -105,6 +108,17 @@ EXPERIMENTS = [
         "4 chiến lược (source_only, select_on_source, pooled, target_only) × 5 k × 20 lần chạy × n_T ∈ {5, 10, 20} trên 4 cohort "
         "→ `E7/<cohort>/`. Dùng cùng bản chia few-shot với E1b.",
         ["e7"], "Một phiên (2–4 giờ), đợt 3 (08/11), sau khi E1b đã chạy."),
+    Experiment(
+        "kaggle_redo_svm_rfe.ipynb", "Chọn lại SVM-RFE (v3.1.6, QĐ25: random_state)",
+        "SVM-RFE của các phiên 29–30/10 không tái lập (LinearSVC dual không có random_state). Hai việc chọn lại và đánh giá lại "
+        "CHỈ svm_rfe bằng `--redo-methods svm_rfe`; mọi phương pháp khác lấy từ checkpoint/dòng đã có trong zip khôi phục.\n"
+        "Nghiệm thu: `JOB_OK`; config.json của mỗi thư mục có `redo_methods = ['svm_rfe']` và `checkpoints_reused_from_commit` / "
+        "`rows_reused_from_commit` = commit của đợt 1 (9b2d6a5 hoặc 68e7c7d).",
+        ["redo_svm_rfe_A", "redo_svm_rfe_B"],
+        "1. `redo_svm_rfe_A` — khôi phục output `e1_phaseA_geo`, `e1_phaseB_tcga`, `ablation_phaseA_geo`, `ablation_phaseA_tcga` "
+        "(cần thư mục `checkpoints/` của pha A; ~1 giờ, 4 tiến trình).\n"
+        "2. `redo_svm_rfe_B` — khôi phục output `redo_svm_rfe_A`, `e1_phaseB_wrappers` (3 cohort GPL570 đã có GA/BPSO), `e1_phaseB_geo` "
+        "(gse42127), `e1_phaseB_tcga`, `fewshot_e1b`, `e4e5_gse37745`, `e4_tcga` (2–3 giờ). Sau đó `ablation_phaseB` và `tables`."),
     Experiment(
         "kaggle_ablation_no_IHC.ipynb", "Ablation — bỏ 4 gen IHC (NKX2-1, TP63, NAPSA, KRT5)",
         "Lặp lại pha A + pha B E1 khi loại 4 gen IHC → `E1_feature_selection_noIHC/`, `E1_classification_noIHC/`. "

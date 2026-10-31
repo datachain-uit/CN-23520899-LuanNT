@@ -7,6 +7,10 @@ v3 (QĐ15, 26/10/2026): 13 selectors (11 non-wrapper by default; GA/BPSO via --m
 --repeats 0 1 2, --k from WRAPPER_K) + fixed knowledge panels (ihc_2, ihc_4, panel_<name> from
 survey_v2/panels/published_panels.csv); k grid {1,2,3,4,5,10,25,50}; gene space = intersection with TCGA for GEO
 cohorts (loader); k-TSP only at even k (odd k -> n_selected = 0, no genes); emissions tracking OFF by default (Y16).
+
+v3.1.6 (QĐ25, 31/10/2026): --redo-methods M ... deletes the checkpoints of those methods first and recomputes them, while
+every other method is taken from the existing checkpoints (restore the previous output as Kaggle Input). The aggregate
+files are rebuilt from all checkpoints; config.json records redo_methods and the commit of the reused checkpoints.
 """
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ from survey_v2.data import drop_genes, load_dataset, sha256, variance_prefilter 
 from survey_v2.e1_splits import validate_repeated_split_manifest  # noqa: E402
 from survey_v2.methods import select  # noqa: E402
 from survey_v2.panels import all_fixed_panels, panel_indices  # noqa: E402
-from survey_v2.runlog import DATA_ROOT, all_versions, results_dir, start_run, write_config  # noqa: E402
+from survey_v2.runlog import DATA_ROOT, all_versions, previous_config, results_dir, start_run, write_config  # noqa: E402
 
 FIXED_PANELS = all_fixed_panels()
 DEFAULT_METHODS = list(C.NON_WRAPPER_METHODS) + list(FIXED_PANELS)
@@ -50,6 +54,8 @@ def parse_args(argv=None):
                     help="ablation: loại các gen này khỏi không gian gen trước khi lọc/chọn (vd. NKX2-1 TP63 NAPSA KRT5); dùng --out riêng")
     ap.add_argument("--track-emissions", dest="track_emissions", action="store_true",
                     help="CodeCarbon estimate (optional, descriptive only; OFF by default — Y16)")
+    ap.add_argument("--redo-methods", nargs="+", default=None,
+                    help="v3.1.6: xoá checkpoint của các phương pháp này rồi tính lại; phương pháp khác lấy từ checkpoint đã có")
     ap.set_defaults(track_emissions=False)
     return ap.parse_args(argv)
 
@@ -115,11 +121,32 @@ def read_csv_safe(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def drop_method_checkpoints(out: Path, methods) -> int:
+    """v3.1.6: xoá checkpoint (metrics + genes) của các phương pháp cần tính lại; trả về số tệp đã xoá."""
+    import re
+    n = 0
+    for m in methods:
+        pat = re.compile(rf"^repeat_\d+_fold_\d+_{re.escape(m)}\.(metrics|genes)\.csv$")
+        for f in (out / "checkpoints").glob(f"repeat_*_fold_*_{m}.*.csv"):
+            if pat.match(f.name):                                  # khớp đúng tên phương pháp (không xoá nhầm)
+                f.unlink()
+                n += 1
+    return n
+
+
 def main(argv=None, script=__file__):
     args = parse_args(argv)
     prov = start_run(script, params={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()})
+    if args.redo_methods:
+        missing = [m for m in args.redo_methods if m not in args.methods]
+        if missing:
+            raise SystemExit(f"--redo-methods phải nằm trong --methods: {missing}")
     for name in args.datasets:
         ds, out = load_dataset(DATA_ROOT, name), results_dir(args.out, name)
+        prev_cfg = previous_config(out)
+        if args.redo_methods:
+            n_del = drop_method_checkpoints(out, args.redo_methods)
+            print(f"[{name}] --redo-methods {args.redo_methods}: đã xoá {n_del} checkpoint, sẽ tính lại", flush=True)
         if args.exclude_genes:
             ds = drop_genes(ds, args.exclude_genes)
             print(f"[{name}] ablation: loại {ds.notes['excluded_genes']} (không có: {ds.notes['excluded_genes_not_found']})", flush=True)
@@ -219,6 +246,9 @@ def main(argv=None, script=__file__):
                "prefilter_p0": args.prefilter, "gene_space": ds.notes, "n_samples": ds.n, "n_genes": ds.p,
                "metrics": ["n_selected", "exact_k", "n_filled", "selection_time_s (descriptive, not E2)", "cpu_time_s", "rss_delta_mb (descriptive)",
                            "emissions_kg_co2 (optional estimate)", "n_eval", "best_fitness", "pairwise_jaccard (descriptive; E4 is the CI version)"],
+               "methods_in_results": sorted(run_df.method.unique()) if len(run_df) else [],
+               "redo_methods": list(args.redo_methods or []),
+               "checkpoints_reused_from_commit": (prev_cfg or {}).get("commit_hash") if args.redo_methods else None,
                "versions": all_versions()}
         write_config(out, prov, cfg, data_files=[ds.data_dir / "expression.h5", ds.data_dir / "metadata.csv", path])
 

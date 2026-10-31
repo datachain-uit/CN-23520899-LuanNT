@@ -12,6 +12,8 @@ Reference points computed here on the same outer splits (same classifier, same p
 
 Outputs (results/survey_v2/E1_classification/<cohort>/): classification_per_fold.csv, classification_summary.csv,
 e1_random_k.csv, e1_scores.csv (--save-scores), config.json. Re-running resumes (existing rows are skipped).
+v3.1.6 (QĐ25): --redo-methods M ... drops the existing rows of those selectors from classification_per_fold.csv (and
+e1_scores.csv) before evaluating, so their panels (re-selected in phase A) are evaluated again; everything else is kept.
 """
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ from survey_v2.classify import evaluate_panel  # noqa: E402
 from survey_v2.data import drop_genes, load_dataset, sha256, variance_prefilter  # noqa: E402
 from survey_v2.e1_splits import validate_repeated_split_manifest  # noqa: E402
 from survey_v2.methods import random_panel  # noqa: E402
-from survey_v2.runlog import DATA_ROOT, all_versions, results_dir, start_run, write_config  # noqa: E402
+from survey_v2.runlog import DATA_ROOT, all_versions, previous_config, results_dir, start_run, write_config  # noqa: E402
 from scripts.run_e1_feature_selection import split_indices, split_path  # noqa: E402
 
 ROW_KEY = ["repeat", "fold", "method", "k", "model"]
@@ -58,6 +60,8 @@ def parse_args(argv=None):
     ap.add_argument("--models-extended", action="store_true",
                     help="ALSO run the 11-model zoo (descriptive, separate file; never for ranking)")
     ap.add_argument("--quick", action="store_true", help="small grids for the extended zoo smoke run")
+    ap.add_argument("--redo-methods", nargs="+", default=None,
+                    help="v3.1.6: bỏ các dòng đã có của các phương pháp này rồi đánh giá lại (panel pha A đã chọn lại)")
     ap.set_defaults(references=True)
     return ap.parse_args(argv)
 
@@ -86,6 +90,25 @@ def _row(name, repeat, seed, fold, method, k, res, n_features, t_fit, extra=None
             "fit_time_s": t_fit, **(extra or {})}
 
 
+def drop_rows_of_methods(paths, methods) -> int:
+    """v3.1.6: xoá các dòng có cột method thuộc `methods` trong các tệp CSV (nếu có); trả về số dòng đã bỏ."""
+    n = 0
+    for path in paths:
+        path = Path(path)
+        if not path.exists():
+            continue
+        try:
+            df = pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            continue
+        if "method" not in df.columns:
+            continue
+        keep = df[~df.method.isin(list(methods))]
+        n += len(df) - len(keep)
+        keep.to_csv(path, index=False, encoding="utf-8-sig")
+    return n
+
+
 def main(argv=None, script=__file__):
     args = parse_args(argv)
     prov = start_run(script, params={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()})
@@ -111,6 +134,10 @@ def main(argv=None, script=__file__):
         panels = panels[panels.repeat.isin(args.repeats)]
         gene_index = {g: i for i, g in enumerate(ds.genes)}
         per_fold_path, random_path, scores_path = out / "classification_per_fold.csv", out / "e1_random_k.csv", out / "e1_scores.csv"
+        prev_cfg = previous_config(out)
+        if args.redo_methods:
+            n_drop = drop_rows_of_methods([per_fold_path, scores_path], args.redo_methods)
+            print(f"[{name}] --redo-methods {args.redo_methods}: đã bỏ {n_drop} dòng cũ, sẽ đánh giá lại", flush=True)
         done = set()
         if per_fold_path.exists():
             prev = pd.read_csv(per_fold_path)
@@ -201,6 +228,8 @@ def main(argv=None, script=__file__):
                "metrics": ["auroc", "bacc", "mcc", "logloss", "brier"], "inner_cv_folds": C.INNER_CV_FOLDS,
                "gene_space": ds.notes, "n_samples": ds.n, "n_genes": ds.p, "methods_found": sorted(panels.method.unique()),
                "note": "no best-classifier-by-test file (O19); extended zoo only in classification_extended_per_fold.csv",
+               "methods_in_results": sorted(result_df.method.unique()), "redo_methods": list(args.redo_methods or []),
+               "rows_reused_from_commit": (prev_cfg or {}).get("commit_hash") if args.redo_methods else None,
                "versions": all_versions()}
         write_config(out, prov, cfg, data_files=[ds.data_dir / "expression.h5", ds.data_dir / "metadata.csv", manifest_path])
         # ---- (tuỳ chọn) bộ 11 mô hình — mô tả, không dùng xếp hạng -----------------------------------------------

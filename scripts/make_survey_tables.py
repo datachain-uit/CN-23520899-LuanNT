@@ -334,8 +334,9 @@ def e6_tradeoff(summary: pd.DataFrame, stab: pd.DataFrame | None, cost: pd.DataF
         out["stability_fraction"] = fraction
     if cost is not None and len(cost):
         c = cost[cost.k == k_cost] if "k" in cost.columns else cost
-        c = c[["method", "wall_s", "cpu_s", "peak_mb"]].drop_duplicates("method").rename(
-            columns={"wall_s": "wall_s_e2", "cpu_s": "cpu_s_e2", "peak_mb": "peak_mb_e2"})
+        mem_col = "maxrss_isolated_mb" if "maxrss_isolated_mb" in c.columns else None
+        c = c[["method", "wall_s", "cpu_s"] + ([mem_col] if mem_col else [])].drop_duplicates("method").rename(
+            columns={"wall_s": "wall_s_e2", "cpu_s": "cpu_s_e2", "maxrss_isolated_mb": "maxrss_isolated_mb_e2"})
         out = out.merge(c, on="method", how="left")
         out["cost_k"] = k_cost
     if "nogueira" in out.columns and "wall_s_e2" in out.columns:
@@ -764,9 +765,11 @@ def main(argv=None, script=__file__) -> None:
     if cost is not None:
         c = cost.copy()
         c["wall_s"] = c["wall_s"].astype(float)
-        mem = "maxrss_isolated_mb" if "maxrss_isolated_mb" in c.columns else "peak_mb"     # Y19: bộ nhớ đỉnh = tiến trình con
-        save(c[[x for x in ("session", "method", "family", "n", "p", "k", "wall_s", "cpu_s", mem, "peak_mb", "maxrss_mb", "repeats", "pop", "generations")
-                if x in c.columns and (x != "peak_mb" or mem != "peak_mb")]], out, "e2_cost_table", man,
+        # Y19/QĐ27: bộ nhớ đỉnh CHỈ từ tiến trình con (maxrss_isolated_mb, VmHWM); không dùng peak_mb (tracemalloc) hay maxrss_mb
+        if "maxrss_isolated_mb" not in c.columns:
+            print("E2: không có maxrss_isolated_mb (chạy với --isolate-memory) — bảng E2 không có cột bộ nhớ", flush=True)
+        save(c[[x for x in ("session", "method", "family", "n", "p", "k", "wall_s", "cpu_s", "maxrss_isolated_mb", "peak_source", "repeats", "pop", "generations")
+                if x in c.columns]], out, "e2_cost_table", man,
              tex=("E2: cost of the selection step at fixed points ($n$ = training part, $p$ = 5000, $k \\in \\{10, 50\\}$; median of 3 runs, "
                   "one Kaggle machine type with cross-session calibration, BLAS single-threaded; peak memory = max RSS of an isolated process).", "tab:e2_cost"))
         dn, dp = man.read_csv(e23 / "e3_scaling_n.csv"), man.read_csv(e23 / "e3_scaling_p.csv")

@@ -74,26 +74,56 @@ def test_merge_e2e3(tmp_path, monkeypatch):
     root = tmp_path.joinpath("results", "survey_v2")
     ref = root / "E2_E3_ref"
     ref.mkdir(parents=True)
-    pd.DataFrame({"method": ["f_test", "l1_lr", "relieff"], "wall_s": [0.1, 10.0, 800.0], "maxrss_isolated_mb": [5, 60, 100]}).to_csv(ref / "e2_cost_point.csv", index=False)
+    pd.DataFrame({"method": ["f_test", "l1_lr", "relieff"], "wall_s": [0.1, 10.0, 800.0], "maxrss_isolated_mb": [5, 60, 100],
+                  "peak_mb": [1, 2, 3], "maxrss_mb": [700, 700, 700]}).to_csv(ref / "e2_cost_point.csv", index=False)
     (ref / "machine_config.json").write_text("{}")
-    (ref / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": None, "commit_hash": "abc", "methods": ["f_test", "l1_lr", "relieff"]}))
+    new_fields = {"timing_tracemalloc": False, "peak_source": "VmHWM", "isolate_memory": True}     # v3.1.6 (QĐ27)
+    (ref / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": None, "commit_hash": "abc", "methods": ["f_test", "l1_lr", "relieff"], **new_fields}))
     for p, m in [("E2_E3_p1", "f_test"), ("E2_E3_p2", "l1_lr"), ("E2_E3_p3", "relieff")]:
         d = root / p
         d.mkdir(parents=True)
         pd.DataFrame({"method": [m], "n": [100], "wall_s": [1.0]}).to_csv(d / "e3_scaling_n.csv", index=False)
         pd.DataFrame({"method": [m], "alpha_n": [1.0]}).to_csv(d / "e3_exponents.csv", index=False)
-        (d / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": True, "commit_hash": "abc", "methods": [m], "n_grid": [100]}))
+        (d / "e3_wrapper_evals.csv").write_bytes(b"\xef\xbb\xbf\n")       # tệp rỗng như các phiên 30/10 (chỉ BOM + xuống dòng)
+        (d / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": True, "commit_hash": "abc", "methods": [m], "n_grid": [100], **new_fields}))
     out = kj.merge_e2e3()
     e2 = pd.read_csv(out / "e2_cost_point.csv")
     assert e2.method.tolist() == ["f_test", "l1_lr", "relieff"] and set(e2.session) == {"E2_E3_ref"}      # E2 chính thức = phiên tham chiếu
+    assert "maxrss_isolated_mb" in e2.columns and "peak_mb" not in e2.columns and "maxrss_mb" not in e2.columns   # QĐ27
+    assert not (out / "e3_wrapper_evals.csv").exists()                                                   # tệp rỗng bị bỏ qua, không lỗi
     e3 = pd.read_csv(out / "e3_scaling_n.csv")
     assert e3.method.tolist() == ["f_test", "l1_lr", "relieff"] and set(e3.session) == {"E2_E3_p1", "E2_E3_p2", "E2_E3_p3"}
     cfg = json.loads((out / "config.json").read_text())
     assert cfg["sources_commit_hash"] == "abc" and cfg["calibration_ok"] is True and "commit_hash" in cfg   # stamp bằng provenance
     assert (out / "machine_config.json").exists()
-    (root / "E2_E3_p2" / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": False, "commit_hash": "abc"}))
+    (root / "E2_E3_p2" / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": False, "commit_hash": "abc", **new_fields}))
     with pytest.raises(SystemExit):
         kj.merge_e2e3()
+    # phiên đo ở bản trước v3.1.6 (tracemalloc bật / bộ nhớ ru_maxrss) -> không gộp (QĐ27)
+    (root / "E2_E3_p2" / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": True, "commit_hash": "abc"}))
+    with pytest.raises(SystemExit, match="tracemalloc"):
+        kj.merge_e2e3()
+    (root / "E2_E3_p2" / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": True, "commit_hash": "abc", **new_fields}))
+    (ref / "config.json").write_text(json.dumps({"traceable": True, "calibration_ok": None, "commit_hash": "abc", "timing_tracemalloc": False,
+                                                 "isolate_memory": True, "peak_source": "ru_maxrss"}))
+    with pytest.raises(SystemExit, match="ru_maxrss"):
+        kj.merge_e2e3()
+
+
+def test_requires_and_redo_jobs():
+    """v3.1.6: việc dùng kết quả pha A phải khai báo `requires` (E5c từng bị bỏ qua im lặng); việc chọn lại SVM-RFE có trong danh mục."""
+    for name in ("e4e5_gse37745", "e4_tcga", "e1_phaseB_geo", "e1_phaseB_tcga", "ablation_phaseB", "tables", "redo_svm_rfe_A", "redo_svm_rfe_B"):
+        assert kj.JOBS[name].requires, name
+    for name in ("redo_svm_rfe_A", "redo_svm_rfe_B"):
+        for argv in kj.JOBS[name].shards:
+            assert "--redo-methods" in argv and argv[argv.index("--redo-methods") + 1] == "svm_rfe", (name, argv)
+    assert all("--methods" in a for a in kj.JOBS["redo_svm_rfe_B"].shards)      # pha B/E1b/E4 chỉ chạy svm_rfe
+    assert "redo_svm_rfe_A" in kj.JOBS["redo_svm_rfe_B"].restore_from
+
+
+def test_pip_freeze_written(tmp_path):
+    out = kj.write_pip_freeze(kj.JOBS["sanity"], tmp_path)
+    assert out is not None and out.exists() and out.read_text(encoding="utf-8").startswith("# python ")
 
 
 def test_run_parallel_stops_at_deadline(tmp_path):

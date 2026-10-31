@@ -12,6 +12,8 @@ Trên mỗi tập con L_T: lọc phương sai (không nhãn) trên L_T → 11 ph
 
 Đầu ra: results/survey_v2/E1b/<cohort>/{e1b_per_run.csv, e1b_selected_genes.csv, e1b_random_k.csv, e1b_stability.csv, config.json}.
 Resume: (split, subset, n_t, method) đã có trong e1b_per_run.csv được bỏ qua.
+v3.1.6 (QĐ25): --redo-methods M ... bỏ các dòng của các phương pháp này trong e1b_per_run.csv và e1b_selected_genes.csv rồi
+chạy lại chúng (phần khác giữ nguyên); e1b_stability.csv được tính lại từ toàn bộ gen đã chọn.
 """
 
 from __future__ import annotations
@@ -34,9 +36,10 @@ from survey_v2.data import load_dataset, sha256, variance_prefilter  # noqa: E40
 from survey_v2.fewshot import fewshot_runs, n_t_sort_key, validate_fewshot_manifest  # noqa: E402
 from survey_v2.methods import random_panel, select  # noqa: E402
 from survey_v2.panels import all_fixed_panels, panel_indices  # noqa: E402
-from survey_v2.runlog import DATA_ROOT, all_versions, results_dir, start_run, write_config  # noqa: E402
+from survey_v2.runlog import DATA_ROOT, all_versions, previous_config, results_dir, start_run, write_config  # noqa: E402
 from survey_v2.stability import nogueira, selections_to_matrix  # noqa: E402
 from scripts.build_fewshot_splits import fewshot_path  # noqa: E402
+from scripts.run_e1_classification import drop_rows_of_methods  # noqa: E402
 
 FIXED_PANELS = all_fixed_panels()
 RUN_KEY = ["split", "subset", "n_t", "method"]
@@ -53,6 +56,7 @@ def parse_args(argv=None):
     ap.add_argument("--random-draws", type=int, default=C.N_RANDOM_DRAWS)
     ap.add_argument("--n-jobs", type=int, default=1)
     ap.add_argument("--out", default="E1b")
+    ap.add_argument("--redo-methods", nargs="+", default=None, help="v3.1.6: bỏ dòng cũ của các phương pháp này rồi chạy lại")
     return ap.parse_args(argv)
 
 
@@ -150,6 +154,10 @@ def main(argv=None, script=__file__):
         if errors:
             raise ValueError(f"{name}: fewshot_splits.csv không hợp lệ: {errors}")
         per_run = out / "e1b_per_run.csv"
+        prev_cfg = previous_config(out)
+        if args.redo_methods:
+            n_drop = drop_rows_of_methods([per_run, out / "e1b_selected_genes.csv"], args.redo_methods)
+            print(f"[{name}] --redo-methods {args.redo_methods}: đã bỏ {n_drop} dòng cũ, sẽ chạy lại", flush=True)
         done = set()
         if per_run.exists():
             prev = pd.read_csv(per_run, dtype={"n_t": str})
@@ -180,6 +188,8 @@ def main(argv=None, script=__file__):
                "protocol": "5 test_T/pool_T splits x 4 nested subsets per n_T per class; prefilter and selection on L_T only; LR-L2 with M5 small-n rule",
                "fewshot_splits_file": str(path), "fewshot_splits_sha256": sha256(path), "prefilter_p0": args.prefilter,
                "random_k_draws": args.random_draws, "stability": "Nogueira over the runs per (n_T, method, k); universe = gene space G",
+               "methods_in_results": sorted(runs_df.method.unique()), "redo_methods": list(args.redo_methods or []),
+               "rows_reused_from_commit": (prev_cfg or {}).get("commit_hash") if args.redo_methods else None,
                "gene_space": ds.notes, "n_samples": ds.n, "n_genes": ds.p, "elapsed_s": time.time() - t_all, "versions": all_versions()}
         write_config(out, prov, cfg, data_files=[ds.data_dir / "expression.h5", ds.data_dir / "metadata.csv", path])
         print(f"[{name}] xong: {len(runs_df)} dòng; ổn định {len(stab)} dòng", flush=True)

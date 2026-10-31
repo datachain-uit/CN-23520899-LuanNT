@@ -16,10 +16,16 @@ v3.1 (QĐ18, Y19 — Review 29/10): (1) hiệu chuẩn giữa phiên: mỗi lầ
 calibration.csv; với --calibration-reference <calibration.csv của phiên tham chiếu>, script tính độ lệch wall time từng mốc và
 DỪNG (mã thoát 3) nếu có mốc lệch >= CALIBRATION_MAX_DRIFT (bỏ qua bằng --allow-drift; khi đó config ghi calibration_ok = false
 và kết quả không được trích). (2) --isolate-memory: bộ nhớ đỉnh E2 đo trong tiến trình con mới cho từng (phương pháp, k)
-(cột maxrss_isolated_mb); peak_mb (tracemalloc) chỉ còn là mô tả.
+(cột maxrss_isolated_mb); peak_mb (tracemalloc) chỉ còn là mô tả [bỏ hẳn ở v3.1.6].
 
 v3.1.4 (QĐ23): --skip-e2 cho các phiên E3 chia phần (E2 chính thức = phiên tham chiếu, tất cả phương pháp trong một phiên);
 C.E3_MAX_P bỏ điểm p quá lớn cho phương pháp quá chậm (elastic_net: tới 10.000).
+
+v3.1.6 (QĐ27, Review 31/10): hai lỗi đo của các phiên 29–30/10 — (1) tracemalloc bật trong lúc đo làm wall time tăng
+tuỳ phương pháp (ReliefF ×5–6, MI ×3, RF ×2,5), (2) bộ nhớ tiến trình con kế thừa đỉnh RSS của tiến trình cha — đã sửa trong
+survey_v2/timing.py; E2_E3_ref và E3 p1..p3 PHẢI chạy lại ở bản này (kết quả cũ chuyển vào 04_Luu-vet). Cột peak_mb và
+maxrss_mb không còn; bộ nhớ đỉnh chỉ có với --isolate-memory (maxrss_isolated_mb, nguồn VmHWM). e3_wrapper_evals.csv chỉ
+được ghi khi có dòng (tệp rỗng làm merge-e2e3 lỗi).
 
 Đầu ra: results/survey_v2/E2_E3/{e2_cost_point.csv, e3_scaling_n.csv, e3_scaling_p.csv, e3_wrapper_evals.csv,
 e3_exponents.csv, calibration.csv, calibration_check.json, machine_config.json, config.json}.
@@ -160,7 +166,8 @@ def main() -> None:
         calibration = run_calibration(args, out, seed, X2, ytr, k_e3) if args.calibrate else None
         baseline = measure_isolated(X2, ytr, k_e3, "none", seed) if args.isolate_memory else None
         if baseline is not None:
-            baseline = {"maxrss_mb": baseline["maxrss_child_mb"]}
+            baseline = {"maxrss_mb": baseline["maxrss_child_mb"], "peak_source": baseline.get("peak_source")}
+            print(f"[bộ nhớ] mức nền của tiến trình con: {baseline['maxrss_mb']:.0f} MB ({baseline.get('peak_source')})", flush=True)
         for k in ([] if args.skip_e2 else args.k):
             for m in args.methods:
                 print(f"E2 {m} k={k} ...", end=" ", flush=True)
@@ -170,7 +177,7 @@ def main() -> None:
                 if args.isolate_memory:
                     r.update(measure_isolated(X2, ytr, int(k), m, seed, baseline=baseline))
                 rows.append({"method": m, "family": C.METHOD_FAMILY.get(m, "other"), "n": X2.shape[0], "p": X2.shape[1], "k": int(k), **r})
-                print(f"wall {r['wall_s']:.2f}s cpu {r['cpu_s']:.2f}s peak {r['peak_mb']:.0f}MB"
+                print(f"wall {r['wall_s']:.2f}s cpu {r['cpu_s']:.2f}s"
                       + (f" maxrss_isolated {r.get('maxrss_isolated_mb', float('nan')):.0f}MB" if args.isolate_memory else ""), flush=True)
             if args.wrappers:
                 for m in C.WRAPPER_METHODS:
@@ -225,7 +232,8 @@ def main() -> None:
                         rows_w.append({"method": m, "pop": pop, "generations": gen, "n_eval_nominal": pop * gen,
                                        "n": X2.shape[0], "p": X2.shape[1], "k": k_e3, **r})
                         print(f"E3 {m} {pop}x{gen} wall {r['wall_s']:.1f}s", flush=True)
-            pd.DataFrame(rows_w).to_csv(out / "e3_wrapper_evals.csv", index=False, encoding="utf-8-sig")
+            if rows_w:                                   # v3.1.6: không ghi tệp rỗng (merge-e2e3 đọc lỗi)
+                pd.DataFrame(rows_w).to_csv(out / "e3_wrapper_evals.csv", index=False, encoding="utf-8-sig")
             # ---- số mũ log–log ---------------------------------------------------------------------------
             exps = []
             dn, dp = pd.DataFrame(rows_n), pd.DataFrame(rows_p)
@@ -247,9 +255,11 @@ def main() -> None:
            "blas_threads": 1, "machine": minfo, "versions": all_versions(), "elapsed_s": time.time() - t_all,
            "calibration": calibration, "calibration_ok": (calibration or {}).get("calibration_ok"),
            "isolate_memory": args.isolate_memory, "skip_e2": args.skip_e2, "skip_e3": args.skip_e3, "e3_max_p": dict(C.E3_MAX_P),
-           "memory_note": ("maxrss_isolated_mb = ru_maxrss của tiến trình con chạy một lần chọn gen trừ mức nền (bộ nhớ đỉnh dùng cho E2); "
-                           "peak_mb = tracemalloc (chỉ cấp phát Python/NumPy, mô tả)") if args.isolate_memory
-                          else "peak_mb = tracemalloc (chỉ cấp phát Python/NumPy); maxrss_mb phụ thuộc thứ tự chạy — không dùng làm bộ nhớ đỉnh (Y19)",
+           "peak_source": (baseline or {}).get("peak_source"), "timing_tracemalloc": False,
+           "memory_note": ("maxrss_isolated_mb = đỉnh RSS (VmHWM trên Linux, v3.1.6/QĐ27) của tiến trình con chạy một lần chọn gen trừ mức nền "
+                           "(bộ nhớ đỉnh dùng cho E2)") if args.isolate_memory
+                          else "không đo bộ nhớ (chạy với --isolate-memory để có maxrss_isolated_mb)",
+           "timing_note": "wall/cpu = trung vị repeats lần sau một lần khởi động; không tracemalloc (v3.1.6, QĐ27)",
            "note": "thời gian chỉ gồm bước chọn gen (không gồm huấn luyện bộ phân loại sau chọn)"}
     write_config(out, prov, cfg, data_files=[ds.data_dir / "expression.h5", ds.data_dir / "metadata.csv"])
     print("xong:", out, flush=True)

@@ -88,11 +88,31 @@ def start_run(script, params: dict | None = None, data_files=()) -> dict:
     return prov
 
 
+def previous_config(out_dir: Path) -> dict | None:
+    """config.json đang có trong thư mục kết quả (nếu có) — dùng để ghi lại commit của lần chạy trước khi tiếp tục (resume)."""
+    path = Path(out_dir) / "config.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def write_config(out_dir: Path, prov: dict, config: dict, data_files=()) -> Path:
     if data_files:
         add_data_files(prov, data_files)
     config = dict(config)
     config["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    prev = previous_config(out_dir)
+    if prev is not None and prev.get("commit_hash") and prev.get("commit_hash") != prov.get("commit_hash"):
+        # v3.1.6 (QĐ28): thư mục đã có kết quả của commit khác (resume / --redo-methods) -> ghi lại để truy vết từng phần
+        hist = list(prev.get("resumed_from") or [])
+        hist.append({"commit_hash": prev.get("commit_hash"), "generated_at": prev.get("generated_at"),
+                     "note": "các dòng/checkpoint không tính lại trong lần chạy này được tạo ở commit này"})
+        config["resumed_from"] = hist
+    elif prev is not None and prev.get("resumed_from"):
+        config["resumed_from"] = prev["resumed_from"]
     stamp(config, prov)
     # The Kaggle acceptance gate reads these fields at the top level.  Keep the
     # full provenance record as well, but do not make callers know its nesting.
