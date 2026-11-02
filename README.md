@@ -72,6 +72,10 @@ Chi tiết và việc phải làm trước: mục "v3.1" đầu `docs/survey_v2/
 v3.1.6 (31/10/2026, QĐ25–QĐ28, sau đợt 1): SVM-RFE có `random_state` (chọn lại bằng `--redo-methods svm_rfe`, việc `redo_svm_rfe_A/B`);
 abess bỏ cột hằng; đo thời gian E2/E3 không tracemalloc và bộ nhớ tiến trình con bằng VmHWM (E2/E3 chạy lại); `requires` cho E4/E5;
 `merge-e2e3` bỏ qua CSV rỗng. Mục "v3.1.6" đầu HUONG-DAN-DOI-CODE.md.
+v3.1.7 (02/11/2026, QĐ30–QĐ32, sau bổ sung đợt 1): seed bootstrap của `make_survey_tables.py` tái lập (CRC32 của khoá, không `hash()`),
+cờ chuyển giao E7 theo Wilcoxon + Holm; bảng ablation IHC (`e1_ablation_noihc*`); việc `panels` cho Girard 2016 / Wilkerson 2013;
+`restore_from` = thứ tự giải nén (mới nhất cuối) và `requires_cfg` chặn khôi phục sai bản; nối CSV theo tiêu đề (`append_csv_aligned`).
+Mục "v3.1.7" đầu HUONG-DAN-DOI-CODE.md.
 
 Bài survey theo cùng bài toán với khoá luận (LUAD vs LUSC; nguồn TCGA + 4 cohort GEO). Bộ thực nghiệm nằm trong `survey_v2/`
 và `scripts/`; hướng dẫn đầy đủ (mục đích từng thí nghiệm, lệnh, đầu ra, tiêu chí chấp nhận, bàn giao) ở

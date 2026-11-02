@@ -14,6 +14,11 @@ Outputs (results/survey_v2/E1_classification/<cohort>/): classification_per_fold
 e1_random_k.csv, e1_scores.csv (--save-scores), config.json. Re-running resumes (existing rows are skipped).
 v3.1.6 (QĐ25): --redo-methods M ... drops the existing rows of those selectors from classification_per_fold.csv (and
 e1_scores.csv) before evaluating, so their panels (re-selected in phase A) are evaluated again; everything else is kept.
+v3.1.7 (Review 02/11, Y31): rows appended on resume are aligned to the existing CSV header (append_csv_aligned). Before,
+a batch whose rows lacked a column of the header (e.g. selector panels appended after random-k rows: no `n_draws`) was
+written positionally, so `n_features_vs_k` landed in the `n_draws` column (metric columns were unaffected: they precede
+both). Legacy files are repaired when read (normalise_per_fold: n_draws only for random_k, n_features_vs_k = n_features − k)
+and the number of repaired rows is recorded in config.json (`legacy_rows_realigned`).
 """
 from __future__ import annotations
 
@@ -90,6 +95,38 @@ def _row(name, repeat, seed, fold, method, k, res, n_features, t_fit, extra=None
             "fit_time_s": t_fit, **(extra or {})}
 
 
+def append_csv_aligned(df: pd.DataFrame, path: Path, encoding: str = "utf-8-sig") -> None:
+    """v3.1.7 (Y31): nối `df` vào CSV theo đúng thứ tự cột của tiêu đề đã có; cột mới -> ghi lại cả tệp với tiêu đề mở rộng."""
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        df.to_csv(path, index=False, encoding=encoding)
+        return
+    with open(path, encoding=encoding) as f:
+        header = [c.strip() for c in f.readline().rstrip("\r\n").split(",")]
+    extra = [c for c in df.columns if c not in header]
+    if extra:
+        old = pd.read_csv(path, encoding=encoding)
+        pd.concat([old, df], ignore_index=True)[header + extra].to_csv(path, index=False, encoding=encoding)
+        return
+    df.reindex(columns=header).to_csv(path, mode="a", index=False, header=False, encoding=encoding)
+
+
+def normalise_per_fold(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """v3.1.7 (Y31): sửa dòng cũ bị lệch cột khi nối (n_features_vs_k nằm ở cột n_draws). Chỉ hai cột sổ sách này được tính
+    lại từ các cột nguyên vẹn: n_draws chỉ có ở random_k; n_features_vs_k = n_features − k cho panel. Trả về (df, số dòng sửa)."""
+    df = df.copy()
+    if "n_draws" not in df.columns:
+        df["n_draws"] = np.nan
+    if "n_features_vs_k" not in df.columns:
+        df["n_features_vs_k"] = np.nan
+    panel = ~df.method.isin(["b0", "random_k"])
+    bad = panel & df.n_draws.notna() & df.n_features_vs_k.isna()
+    n_bad = int(bad.sum())
+    df.loc[panel, "n_features_vs_k"] = (pd.to_numeric(df.loc[panel, "n_features"], errors="coerce") - pd.to_numeric(df.loc[panel, "k"], errors="coerce"))
+    df.loc[~df.method.eq("random_k"), "n_draws"] = np.nan
+    return df, n_bad
+
+
 def drop_rows_of_methods(paths, methods) -> int:
     """v3.1.6: xoá các dòng có cột method thuộc `methods` trong các tệp CSV (nếu có); trả về số dòng đã bỏ."""
     n = 0
@@ -138,9 +175,14 @@ def main(argv=None, script=__file__):
         if args.redo_methods:
             n_drop = drop_rows_of_methods([per_fold_path, scores_path], args.redo_methods)
             print(f"[{name}] --redo-methods {args.redo_methods}: đã bỏ {n_drop} dòng cũ, sẽ đánh giá lại", flush=True)
-        done = set()
+        done, n_realigned = set(), 0
         if per_fold_path.exists():
             prev = pd.read_csv(per_fold_path)
+            if len(prev):
+                prev, n_realigned = normalise_per_fold(prev)
+                if n_realigned:
+                    prev.to_csv(per_fold_path, index=False, encoding="utf-8-sig")
+                    print(f"[{name}] v3.1.7: sửa {n_realigned} dòng cũ lệch cột (n_draws/n_features_vs_k)", flush=True)
             done = set(map(tuple, prev[ROW_KEY].itertuples(index=False, name=None)))
         rows, rand_rows, score_rows = [], [], []
         cid = C.cohort_id(name)
@@ -201,18 +243,18 @@ def main(argv=None, script=__file__):
                         print(f"[{name}] repeat {repeat} fold {fold} {method} k={k} {model}: AUROC={res.auroc:.3f}", flush=True)
             # ghi dần để resume được
             if rows:
-                pd.DataFrame(rows).to_csv(per_fold_path, mode="a", index=False, header=not per_fold_path.exists(), encoding="utf-8-sig")
+                append_csv_aligned(pd.DataFrame(rows), per_fold_path)
                 rows = []
             if rand_rows:
-                pd.DataFrame(rand_rows).to_csv(random_path, mode="a", index=False, header=not random_path.exists(), encoding="utf-8-sig")
+                append_csv_aligned(pd.DataFrame(rand_rows), random_path)
                 rand_rows = []
             if score_rows:
-                pd.DataFrame(score_rows).to_csv(scores_path, mode="a", index=False, header=not scores_path.exists())
+                append_csv_aligned(pd.DataFrame(score_rows), scores_path, encoding="utf-8")
                 score_rows = []
         if not per_fold_path.exists():
             print(f"[{name}] không có gì để đánh giá (chưa có panel pha A?)", flush=True)
             continue
-        result_df = pd.read_csv(per_fold_path).drop_duplicates(subset=ROW_KEY, keep="last")
+        result_df, _ = normalise_per_fold(pd.read_csv(per_fold_path).drop_duplicates(subset=ROW_KEY, keep="last"))
         result_df.to_csv(per_fold_path, index=False, encoding="utf-8-sig")
         metric_cols = ["auroc", "bacc", "mcc", "logloss", "brier", "fit_time_s"]
         summary = result_df.groupby(["cohort", "method", "k", "model"], as_index=False)[metric_cols].agg(["mean", "std", "count"])
@@ -230,7 +272,7 @@ def main(argv=None, script=__file__):
                "note": "no best-classifier-by-test file (O19); extended zoo only in classification_extended_per_fold.csv",
                "methods_in_results": sorted(result_df.method.unique()), "redo_methods": list(args.redo_methods or []),
                "rows_reused_from_commit": (prev_cfg or {}).get("commit_hash") if args.redo_methods else None,
-               "versions": all_versions()}
+               "legacy_rows_realigned": n_realigned, "versions": all_versions()}
         write_config(out, prov, cfg, data_files=[ds.data_dir / "expression.h5", ds.data_dir / "metadata.csv", manifest_path])
         # ---- (tuỳ chọn) bộ 11 mô hình — mô tả, không dùng xếp hạng -----------------------------------------------
         if args.models_extended:

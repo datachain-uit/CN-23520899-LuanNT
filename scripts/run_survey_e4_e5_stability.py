@@ -42,7 +42,7 @@ from survey_v2.data import (add_correlated_copies, load_dataset, repeated_patien
 from survey_v2.methods import random_panel, select  # noqa: E402
 from survey_v2.runlog import DATA_ROOT, all_versions, previous_config, results_dir, start_run, write_config  # noqa: E402
 from survey_v2.stability import kuncheva_index, mean_jaccard, nogueira, overlap_matrix, selections_to_matrix  # noqa: E402
-from scripts.run_e1_classification import drop_rows_of_methods  # noqa: E402
+from scripts.run_e1_classification import append_csv_aligned, drop_rows_of_methods  # noqa: E402
 
 COHORT_ID = {name: i for i, name in enumerate(C.DATASETS)}
 METHOD_ID = dict(C.METHOD_ID)
@@ -131,7 +131,7 @@ def select_on_subset(ds, idx, methods, k_list, seed_parts, args, extra_cols: dic
 
 def append_csv(path: Path, rows):
     if rows:
-        pd.DataFrame(rows).to_csv(path, mode="a", index=False, header=not path.exists(), encoding="utf-8-sig")
+        append_csv_aligned(pd.DataFrame(rows), path)        # v3.1.7 (Y31): nối theo đúng thứ tự cột của tiêu đề đã có
 
 
 def done_triples(path: Path, cols):

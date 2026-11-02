@@ -121,6 +121,42 @@ def test_requires_and_redo_jobs():
     assert "redo_svm_rfe_A" in kj.JOBS["redo_svm_rfe_B"].restore_from
 
 
+def test_restore_order_requires_cfg_and_panels(tmp_path, monkeypatch):
+    """v3.1.7 (Review 02/11, QĐ30–QĐ32): restore_from = thứ tự giải nén (output mới nhất cuối); requires_cfg chặn khôi phục sai bản;
+    việc `panels` chạy hai panel công bố qua pha A/B và E1b; `tables` chỉ chạy sau `panels`."""
+    assert kj.JOBS["redo_svm_rfe_B"].restore_from[-1] == "redo_svm_rfe_A"
+    assert kj.JOBS["ablation_phaseB"].restore_from[-1] == "redo_svm_rfe_A"
+    assert kj.JOBS["tables"].restore_from[-2:] == ["redo_svm_rfe_B", "panels"]
+    assert kj.JOBS["panels"].restore_from == ["redo_svm_rfe_B"]
+    assert kj.PUBLISHED_PANELS == ["panel_girard2016", "panel_wilkerson2013"]
+    pan = kj.JOBS["panels"]
+    for argv in pan.shards + pan.finalize:
+        assert "--redo-methods" in argv and set(kj.PUBLISHED_PANELS) <= set(argv), argv
+        assert "svm_rfe" not in argv
+    assert sum("run_e1_feature_selection" in a[0] for a in pan.shards) == 5
+    assert sum("run_e1_classification" in a[0] for a in pan.finalize) == 5 and sum("e1b" in a[0] for a in pan.finalize) == 4
+    assert all("--no-references" in a for a in pan.finalize if "run_e1_classification" in a[0])
+    # requires_cfg: đúng bản -> không báo; sai bản (chưa chọn lại svm_rfe) -> báo và nêu thứ tự khôi phục
+    root = tmp_path / "results" / "survey_v2"
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    job = kj.Job("t", "x", "x", [], [], requires=["E1_feature_selection/gse10245/selected_genes.csv"],
+                 requires_cfg=[("E1_feature_selection/gse10245/config.json", "redo_methods", "svm_rfe"),
+                               ("E2_E3/config.json", "timing_tracemalloc", False)], restore_from=["a", "b"])
+    assert len(kj.check_requires(job)) == 3                                   # thiếu cả ba
+    (root / "E1_feature_selection" / "gse10245").mkdir(parents=True)
+    (root / "E1_feature_selection" / "gse10245" / "selected_genes.csv").write_text("x\n", encoding="utf-8")
+    (root / "E1_feature_selection" / "gse10245" / "config.json").write_text(json.dumps({"redo_methods": []}), encoding="utf-8")
+    (root / "E2_E3").mkdir()
+    (root / "E2_E3" / "config.json").write_text(json.dumps({"timing_tracemalloc": True}), encoding="utf-8")
+    msgs = kj.check_requires(job)
+    assert len(msgs) == 2 and "redo_methods = []" in msgs[0] and "a, b" in msgs[0] and "timing_tracemalloc = True" in msgs[1]
+    (root / "E1_feature_selection" / "gse10245" / "config.json").write_text(json.dumps({"redo_methods": ["svm_rfe"]}), encoding="utf-8")
+    (root / "E2_E3" / "config.json").write_text(json.dumps({"timing_tracemalloc": False}), encoding="utf-8")
+    assert kj.check_requires(job) == []
+    for name in ("redo_svm_rfe_B", "ablation_phaseB", "tables", "panels"):
+        assert kj.JOBS[name].requires_cfg, name
+
+
 def test_pip_freeze_written(tmp_path):
     out = kj.write_pip_freeze(kj.JOBS["sanity"], tmp_path)
     assert out is not None and out.exists() and out.read_text(encoding="utf-8").startswith("# python ")

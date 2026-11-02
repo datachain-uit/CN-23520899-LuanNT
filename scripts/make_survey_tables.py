@@ -19,6 +19,14 @@ Thống kê (KBTN v2.1; QĐ8, QĐ11, QĐ13):
 * E7: chênh lệch ghép cặp (chiến lược − target_only) với CI bootstrap qua các lần chạy; Holm trên 3 mức n_T.
 * E6: ghép AUROC (E1, k = OVERLAP_K) – Nogueira (E4, tỉ lệ --e6-fraction) – thời gian (E2, k = OVERLAP_K); mặt Pareto.
 
+* Ablation IHC (v3.1.7, QĐ31): E1_classification_noIHC (pha B không 4 gen IHC) so với E1_classification cùng (cohort, repeat,
+  fold, method, k): ΔAUROC ghép cặp với CI 95 % (Nadeau–Bengio) và số gen IHC trung bình trong panel đầy đủ.
+
+v3.1.7 (Review 02/11/2026, QĐ30): seed bootstrap suy từ khoá (cohort, method, k, n_T) bằng CRC32 — không dùng `hash()` của Python
+(bị ngẫu nhiên hoá theo tiến trình, PYTHONHASHSEED), nên CI của E1b/E7 tái lập giữa các lần chạy. Cờ `positive_transfer` /
+`negative_transfer` của E7 theo kiểm định đặt trước (Wilcoxon, Holm trên 3 mức n_T, α = 0,05) và dấu của chênh lệch trung bình;
+CI bootstrap chỉ mô tả.
+
     python scripts/make_survey_tables.py
     python scripts/make_survey_tables.py --e6-fraction 0.9 --no-figures
 """
@@ -29,6 +37,7 @@ import argparse
 import json
 import sys
 import time
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -45,8 +54,10 @@ from survey_v2.stats import bayesian_correlated_ttest, holm, mean_ci, nadeau_ben
 METHOD_LABEL = {"f_test": "F-test", "mutual_info": "MI", "mrmr": "mRMR", "relieff": "ReliefF", "l1_lr": "L1-LR",
                 "elastic_net": "Elastic Net", "rf_importance": "RF importance", "svm_rfe": "SVM-RFE", "abess": "abess (L0)",
                 "stability_selection": "Stability selection", "ktsp": "k-TSP", "ga": "GA", "bpso": "BPSO",
-                "b0": "B0 (all genes)", "random_k": "random-k", "ihc_2": "IHC-2", "ihc_4": "IHC-4"}
-METHOD_ORDER = list(C.ALL_SELECTORS) + ["ihc_2", "ihc_4", "random_k", "b0"]
+                "b0": "B0 (all genes)", "random_k": "random-k", "ihc_2": "IHC-2", "ihc_4": "IHC-4",
+                "panel_girard2016": "Girard 2016", "panel_wilkerson2013": "Wilkerson 2013"}
+METHOD_ORDER = list(C.ALL_SELECTORS) + ["ihc_2", "ihc_4", "panel_girard2016", "panel_wilkerson2013", "random_k", "b0"]
+IHC_GENES = ("NKX2-1", "TP63", "NAPSA", "KRT5")       # ablation (QĐ31): 4 gen IHC bị loại trong E1_*_noIHC
 REFERENCE_SET = {"b0", "random_k", "ihc_2", "ihc_4"}
 
 
@@ -83,6 +94,7 @@ def parse_args(argv=None):
     ap.add_argument("--e7-dir", default="E7")
     ap.add_argument("--e2e3-dir", default="E2_E3")
     ap.add_argument("--e4e5-dir", default="E4_E5")
+    ap.add_argument("--e1-noihc-dir", default="E1_classification_noIHC", help="pha B của ablation loại 4 gen IHC (v3.1.7, QĐ31)")
     ap.add_argument("--out", default="tables")
     ap.add_argument("--fig-out", default="figures")
     ap.add_argument("--classifier", default="lr_l2")
@@ -292,6 +304,48 @@ def e1_bayes(per_fold: pd.DataFrame, cohort: str, classifier: str, rope: float =
 # ---------------------------------------------------------------------------------------------------
 # E2–E3
 # ---------------------------------------------------------------------------------------------------
+def e1_ablation_ihc(per_fold: pd.DataFrame, per_fold_noihc: pd.DataFrame, genes_full: pd.DataFrame | None, classifier: str,
+                    ihc_genes=IHC_GENES) -> pd.DataFrame:
+    """Ablation loại 4 gen IHC (v3.1.7, QĐ31): ghép cặp pha B đầy đủ và pha B không IHC theo (cohort, repeat, fold, method, k).
+
+    Với mỗi (cohort, method, k): AUROC trung bình đầy đủ / không IHC, ΔAUROC = không IHC − đầy đủ (trung bình, SD, CI 95 %
+    Nadeau–Bengio qua các fold ghép cặp), và số gen IHC trung bình trong panel của bản đầy đủ (từ selected_genes.csv).
+    random-k: trung bình các lần rút trong fold rồi ghép cặp; B0: k = số gen của không gian (khác nhau 4 gen nên ghép theo
+    method). IHC-2/IHC-4 không có trong bản không IHC (panel rỗng) nên không xuất hiện."""
+    key = ["cohort", "repeat", "fold", "method", "k"]
+    a = per_fold[per_fold.classifier == classifier][key + ["auroc"]].copy()
+    b = per_fold_noihc[per_fold_noihc.classifier == classifier][key + ["auroc"]].copy()
+    for df in (a, b):
+        df.loc[df.method == "b0", "k"] = -1                     # B0: không gian gen khác 4 gen → ghép theo method
+    a = a.groupby(key, as_index=False).auroc.mean().rename(columns={"auroc": "auroc_full"})     # random-k: trung bình các lần rút
+    b = b.groupby(key, as_index=False).auroc.mean().rename(columns={"auroc": "auroc_noihc"})
+    m = a.merge(b, on=key, how="inner")
+    if m.empty:
+        return pd.DataFrame()
+    ihc = None
+    if genes_full is not None and len(genes_full):
+        gk = ["cohort", "method", "k"]
+        n_ihc = genes_full[genes_full.gene.isin(list(ihc_genes))].groupby(gk).size().rename("n_ihc")
+        n_panels = genes_full.drop_duplicates(gk + ["repeat", "fold"]).groupby(gk).size().rename("n_panels")
+        ihc = pd.concat([n_ihc, n_panels], axis=1).fillna({"n_ihc": 0}).reset_index()
+        ihc["ihc_genes_per_panel"] = ihc.n_ihc / ihc.n_panels
+        ihc = ihc[gk + ["ihc_genes_per_panel"]].assign(k=lambda x: x.k.astype(int))
+    rows = []
+    for (co, meth, k), g in m.groupby(["cohort", "method", "k"]):
+        d = (g.auroc_noihc - g.auroc_full).to_numpy(float)
+        s = mean_ci(d)
+        rows.append({"cohort": co, "method": meth, "k": int(k), "n_folds": int(len(g)),
+                     "auroc_full": float(g.auroc_full.mean()), "auroc_noihc": float(g.auroc_noihc.mean()),
+                     "delta_mean": s["mean"], "delta_sd": s["sd"], "delta_ci_low": s["ci_low"], "delta_ci_high": s["ci_high"]})
+    df = pd.DataFrame(rows)
+    if ihc is not None:
+        df = df.merge(ihc, on=["cohort", "method", "k"], how="left")
+    df["method_order"] = df["method"].map({mm: i for i, mm in enumerate(METHOD_ORDER)}).fillna(99)
+    df = df.sort_values(["cohort", "method_order", "k"]).drop(columns="method_order").reset_index(drop=True)
+    df["k"] = df["k"].map(lambda v: "all" if v < 0 else int(v))        # B0: toàn bộ không gian gen
+    return df
+
+
 def e3_exponent_table(exps: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for r in exps.itertuples(index=False):
@@ -354,6 +408,11 @@ def _n_t_key(v):
     return 10**9 if str(v) == "pool" else int(v)
 
 
+def _stable_seed(*parts) -> int:
+    """Seed tái lập từ khoá (v3.1.7, QĐ30): CRC32 của chuỗi khoá, không phụ thuộc PYTHONHASHSEED hay thứ tự chạy."""
+    return zlib.crc32("|".join(str(p) for p in parts).encode("utf-8")) & 0x7FFFFFFF
+
+
 def _boot_ci(x: np.ndarray, n_boot: int = 2000, seed: int = 0):
     x = np.asarray(x, dtype=float)
     x = x[~np.isnan(x)]
@@ -369,7 +428,7 @@ def e1b_curves(per_run: pd.DataFrame, delta: float = C.KSTAR_DELTA) -> pd.DataFr
     rows = []
     for (co, m, k, n_t), g in per_run.groupby(["cohort", "method", "k", "n_t"]):
         x = g.auroc.to_numpy(float)
-        lo, hi = _boot_ci(x, seed=abs(hash((co, m, int(k), str(n_t)))) % (2**31))
+        lo, hi = _boot_ci(x, seed=_stable_seed(co, m, int(k), str(n_t)))
         rows.append({"cohort": co, "method": m, "k": int(k), "n_t": str(n_t), "n_runs": int(np.sum(~np.isnan(x))),
                      "auroc_mean": float(np.nanmean(x)) if np.any(~np.isnan(x)) else np.nan, "auroc_sd": float(np.nanstd(x, ddof=1)) if np.sum(~np.isnan(x)) > 1 else np.nan,
                      "auroc_ci_low": lo, "auroc_ci_high": hi,
@@ -398,7 +457,11 @@ def e1b_curves(per_run: pd.DataFrame, delta: float = C.KSTAR_DELTA) -> pd.DataFr
 
 
 def e7_table(per_run: pd.DataFrame) -> pd.DataFrame:
-    """Chênh lệch ghép cặp (chiến lược − target_only) theo (cohort, n_T, k): trung bình, CI bootstrap qua các lần chạy, p dấu (Wilcoxon), Holm trên n_T."""
+    """Chênh lệch ghép cặp (chiến lược − target_only) theo (cohort, n_T, k): trung bình, CI bootstrap qua các lần chạy (mô tả),
+    p Wilcoxon hai phía + Holm trên 3 mức n_T (kiểm định đặt trước, KBTN Mục 9). v3.1.7 (QĐ30): positive_transfer /
+    negative_transfer = p_holm < 0,05 và dấu của diff_mean (trước đây theo CI bootstrap, không tái lập — Review 02/11).
+    Wilcoxon gọi với tham số mặc định ghi tường minh (zero_method = "wilcox", method = "auto"); p phụ thuộc phiên bản scipy
+    (requirements-kaggle.txt = môi trường của số liệu)."""
     from scipy import stats as st
     key = ["cohort", "split", "subset", "n_t", "k"]
     base = per_run[per_run.strategy == "target_only"][key + ["auroc"]].rename(columns={"auroc": "auroc_target_only"})
@@ -407,21 +470,24 @@ def e7_table(per_run: pd.DataFrame) -> pd.DataFrame:
         g = per_run[per_run.strategy == strat].merge(base, on=key, how="inner")
         for (co, n_t, k), h in g.groupby(["cohort", "n_t", "k"]):
             d = (h.auroc - h.auroc_target_only).to_numpy(float)
-            lo, hi = _boot_ci(d, seed=abs(hash((co, strat, str(n_t), int(k)))) % (2**31))
+            lo, hi = _boot_ci(d, seed=_stable_seed(co, strat, str(n_t), int(k)))
             try:
-                p = float(st.wilcoxon(d, alternative="two-sided").pvalue) if np.any(d != 0) else 1.0
+                p = float(st.wilcoxon(d, zero_method="wilcox", correction=False, alternative="two-sided", method="auto").pvalue) if np.any(d != 0) else 1.0
             except ValueError:
                 p = np.nan
             rows.append({"cohort": co, "strategy": strat, "n_t": str(n_t), "k": int(k), "n_runs": len(d),
                          "auroc_strategy": float(h.auroc.mean()), "auroc_target_only": float(h.auroc_target_only.mean()),
                          "diff_mean": float(d.mean()), "diff_ci_low": lo, "diff_ci_high": hi, "p_wilcoxon": p,
-                         "negative_transfer": bool(hi < 0), "positive_transfer": bool(lo > 0)})
+                         "ci_excludes_zero": bool(lo > 0 or hi < 0)})
     df = pd.DataFrame(rows)
     if df.empty:
         return df
     df["p_wilcoxon_holm"] = np.nan
     for _, idx in df.groupby(["cohort", "strategy", "k"]).groups.items():     # họ Holm = các mức n_T
         df.loc[idx, "p_wilcoxon_holm"] = holm(df.loc[idx, "p_wilcoxon"].to_numpy())
+    sig = df["p_wilcoxon_holm"] < C.ALPHA
+    df["positive_transfer"] = (sig & (df["diff_mean"] > 0)).astype(bool)
+    df["negative_transfer"] = (sig & (df["diff_mean"] < 0)).astype(bool)
     return df.sort_values(["cohort", "strategy", "k", "n_t"], key=lambda c: c.map(_n_t_key) if c.name == "n_t" else c)
 
 
@@ -710,6 +776,32 @@ def main(argv=None, script=__file__) -> None:
     else:
         status["E1"] = "chưa có"
         print("E1: chưa có kết quả (pha B)", flush=True)
+
+    # ---------------- Ablation IHC (v3.1.7, QĐ31) ----------------
+    noihc_root = root / args.e1_noihc_dir
+    if per_fold is not None and noihc_root.exists():
+        pf_no, _ = load_phase_b(noihc_root, root / (args.e1_select_dir + "_noIHC"), man)
+        genes_full = []
+        for d in sorted(p for p in (root / args.e1_select_dir).iterdir() if p.is_dir()) if (root / args.e1_select_dir).exists() else []:
+            gsel = man.read_csv(d / "selected_genes.csv")
+            if gsel is not None and len(gsel):
+                genes_full.append(gsel[["cohort", "repeat", "fold", "method", "k", "gene"]])
+        if pf_no is not None:
+            abl = e1_ablation_ihc(per_fold, pf_no, pd.concat(genes_full, ignore_index=True) if genes_full else None, args.classifier)
+            if len(abl):
+                save(abl, out, "e1_ablation_noihc", man)
+                abl_main = abl[abl.k.isin(list(C.ROPE_K)) & ~abl.method.isin(["b0"])].copy()
+                abl_main["delta"] = [f"{d:+.3f} [{lo:+.3f}; {hi:+.3f}]" for d, lo, hi in zip(abl_main.delta_mean, abl_main.delta_ci_low, abl_main.delta_ci_high)]
+                wide_abl = abl_main.pivot_table(index=["method", "k"], columns="cohort", values="delta", aggfunc="first").reset_index()
+                wide_abl.columns = [str(c) for c in wide_abl.columns]
+                save(wide_abl, out, "e1_ablation_noihc_table", man,
+                     tex=("Ablation: change in AUROC when the four IHC genes (NKX2-1, TP63, NAPSA, KRT5) are removed before selection "
+                          "($\\Delta$ = without IHC $-$ full, paired over the same CV folds; 95\\% CI with Nadeau--Bengio variance).", "tab:e1_ablation_ihc"))
+                status["ablation_IHC"] = {"cohorts": sorted(abl.cohort.unique()), "n_rows": int(len(abl))}
+        else:
+            status["ablation_IHC"] = "chưa có (E1_classification_noIHC rỗng)"
+    else:
+        status["ablation_IHC"] = "chưa có"
 
     # ---------------- E1b ----------------
     e1b_root = root / args.e1b_dir

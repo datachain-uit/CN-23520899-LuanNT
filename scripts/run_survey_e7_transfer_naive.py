@@ -33,6 +33,7 @@ from survey_v2.fewshot import fewshot_runs, validate_fewshot_manifest  # noqa: E
 from survey_v2.runlog import DATA_ROOT, all_versions, results_dir, start_run, write_config  # noqa: E402
 from survey_v2.transfer import TransferContext  # noqa: E402
 from scripts.build_fewshot_splits import fewshot_path  # noqa: E402
+from scripts.run_e1_classification import append_csv_aligned  # noqa: E402
 
 RUN_KEY = ["split", "subset", "n_t", "strategy", "k"]
 
@@ -95,7 +96,7 @@ def run_one(ctx: TransferContext, ds, cid, split, seed, subset, n_t, train_ids, 
 
 def append_csv(path: Path, rows):
     if rows:
-        pd.DataFrame(rows).to_csv(path, mode="a", index=False, header=not path.exists(), encoding="utf-8-sig")
+        append_csv_aligned(pd.DataFrame(rows), path)        # v3.1.7 (Y31): nối theo đúng thứ tự cột của tiêu đề đã có
 
 
 def main(argv=None, script=__file__):

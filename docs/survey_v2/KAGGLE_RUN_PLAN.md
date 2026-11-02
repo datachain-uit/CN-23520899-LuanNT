@@ -1,4 +1,10 @@
-# Chạy survey v3 trên Kaggle — kế hoạch phiên (sau QĐ21 + QĐ22, 29/10/2026; cập nhật v3.1.6, 31/10/2026)
+# Chạy survey v3 trên Kaggle — kế hoạch phiên (sau QĐ21 + QĐ22, 29/10/2026; cập nhật v3.1.7, 02/11/2026)
+
+> **Cập nhật 02/11 (Review 02/11, QĐ30–QĐ32).** Bổ sung đợt 1 đã xong (9 phiên ở `6ea47e8`). Việc còn lại: `panels`
+> (notebook `kaggle_panels.ipynb`; khôi phục `redo_svm_rfe_B`) → `tables` (khôi phục **đúng thứ tự** `e0, sanity, e7, e2e3_merge,
+> ablation_phaseB, redo_svm_rfe_B, panels` — zip sau ghi đè zip trước). `kaggle_jobs.py run` dừng (mã 2) nếu config.json của đầu vào
+> không đúng bản (`requires_cfg`); `kaggle_jobs.py status` in commit + redo_methods của từng thư mục đã khôi phục. Mọi phiên mới dùng
+> `REPO_COMMIT` = commit v3.1.7 đã push.
 
 > **Cập nhật 31/10 (Review 31/10, QĐ25–QĐ28).** Đợt 1 đã xong (17 phiên). Việc còn lại, theo thứ tự: `redo_svm_rfe_A` → `redo_svm_rfe_B`
 > (notebook `kaggle_redo_svm_rfe.ipynb`; chỉ chọn lại SVM-RFE) → `e2_ref` **chạy lại** → `e3_p1`, `e3_p2`, `e3_p3` **chạy lại** → `e2e3_merge`
@@ -16,6 +22,7 @@ cần khôi phục và kiểm tra đầu ra nằm trong `scripts/kaggle_jobs.py`
 | `kaggle_E1_feature_selection_classification.ipynb` | E1 (pha A, pha B, wrapper) | `e1_phaseA_geo`, `e1_phaseB_geo`, `e1_phaseA_tcga_r012`, `e1_phaseA_tcga_r34`, `e1_phaseB_tcga`, `wrap_<cohort>` ×3, `e1_phaseB_wrappers` |
 | `kaggle_E1b_fewshot.ipynb` | E1b | `fewshot_e1b` |
 | `kaggle_E2_E3_timing.ipynb` | E2 + E3 | `e2_ref`, `e3_p1`, `e3_p2`, `e3_p3`, `e2e3_merge` |
+| `kaggle_panels.ipynb` | Panel công bố (v3.1.7) | `panels` |
 | `kaggle_E4_E5_stability.ipynb` | E4 + E5 | `e4e5_gse37745`, `e4_tcga` |
 | `kaggle_E6_tables.ipynb` | E6 + bảng, hình | `tables` |
 | `kaggle_E7_transfer.ipynb` | E7 | `e7` |

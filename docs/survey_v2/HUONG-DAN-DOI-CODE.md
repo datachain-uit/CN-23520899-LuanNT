@@ -1,9 +1,38 @@
 # Hướng dẫn đội code — Thực nghiệm survey v3.1 (E0–E7, dùng chung với RQ1 khoá luận)
 
-Phiên bản 31/10/2026 (v3.1.6; v3.1 = bản v3 của Review 26/10 ghép lên HEAD `2508a2a` của đội code, QĐ18–QĐ20 của Review 29/10;
-v3.1.1–v3.1.5 = QĐ21–QĐ24; v3.1.6 = QĐ25–QĐ28 của Review 31/10).
+Phiên bản 02/11/2026 (v3.1.7; v3.1 = bản v3 của Review 26/10 ghép lên HEAD `2508a2a` của đội code, QĐ18–QĐ20 của Review 29/10;
+v3.1.1–v3.1.5 = QĐ21–QĐ24; v3.1.6 = QĐ25–QĐ28 của Review 31/10; v3.1.7 = QĐ30–QĐ32 của Review 02/11).
 Áp dụng cho gói `survey_v2/` + `scripts/` trên nhánh `survey-v2-code`. Người nhận: đội code (LuanNT). Người viết bài: GVHD.
 Mọi thắc mắc về *thiết kế* hỏi GVHD trước khi đổi code.
+
+---
+
+## v3.1.7 — sau bổ sung đợt 1 (Review 02/11/2026, QĐ30–QĐ32): đọc trước, làm trong 03–05/11
+
+Bổ sung đợt 1 (9 phiên ở `6ea47e8`, 01–02/11) được nghiệm thu: svm_rfe chọn lại tái lập (40/40 REUSE), E2/E3 đo lại không
+tracemalloc + VmHWM, hiệu chuẩn đạt lần đầu ở cả ba phiên, 12 phương pháp còn lại trùng từng byte với đợt 1. Hai phát hiện của
+đội code (HANDOVER 04/11, Phát hiện 2 và 4) là đúng và được sửa trong bản này; GVHD phát hiện thêm một lỗi nối CSV (Y31). Panel
+công bố chưa chạy (CSV điền sau commit chạy phiên) nên bảng chính thức còn thiếu hàng `panel_*` và bảng ablation IHC.
+
+| # | Vấn đề | Ảnh hưởng | Sửa trong v3.1.7 | Phải chạy lại |
+|---|---|---|---|---|
+| QĐ30 | `make_survey_tables.py` lấy seed bootstrap từ `hash()` của Python (ngẫu nhiên theo tiến trình, PYTHONHASHSEED) — Phát hiện 4 | cận CI của `e1b_learning_curves`, `e7_transfer_table` lệch ≤ 0,008 giữa hai lần chạy cùng đầu vào; cờ `positive_transfer` (= cận dưới CI > 0) đổi ở 1 ô (GSE30219, select-on-source, n_T = 10, k = 5) | seed = CRC32 của khoá (cohort, method, k, n_T); cờ `positive/negative_transfer` theo kiểm định đặt trước (Wilcoxon + Holm, α = 0,05) và dấu của `diff_mean`; CI chỉ mô tả (`ci_excludes_zero`); Wilcoxon gọi với tham số mặc định ghi tường minh | `tables` (0,04 giờ; sau `panels`) |
+| QĐ31 | `tables/` không có bảng ablation IHC (E1_classification_noIHC không phải đầu vào của script) — HANDOVER 3.7 | bảng ablation của khoá luận (hạn 10/11) phải tính tay | `e1_ablation_noihc.csv` (mọi k) và `e1_ablation_noihc_table.csv/.tex` (k ∈ {2, 5, 10}): ΔAUROC = không IHC − đầy đủ ghép cặp theo fold, CI 95 % Nadeau–Bengio, số gen IHC trung bình trong panel đầy đủ | `tables` |
+| QĐ32 | `published_panels.csv` điền ở `b0a1844` (sau `6ea47e8`) nên không có phiên nào chạy `panel_girard2016`, `panel_wilkerson2013` (G-14, R1-04) | bảng E1/E1b chính thức thiếu hai panel công bố | việc `panels` (notebook `kaggle_panels.ipynb`): pha A (panel cố định, gen thiếu ghi vào config), pha B `--no-references`, E1b, `--redo-methods` chỉ hai panel; `make_survey_tables` có nhãn/thứ tự cho `panel_*` (so với B0 được; không so với random-k vì k = 42/52 ngoài lưới) | `panels` (< 0,5 giờ; khôi phục `redo_svm_rfe_B`) rồi `tables` |
+| O28 | `restore_from` của `redo_svm_rfe_B` liệt kê `redo_svm_rfe_A` đầu tiên trong khi notebook giải nén theo thứ tự và zip sau ghi đè zip trước — Phát hiện 2 (đội code đã tự đặt cuối, kết quả đúng) | nếu làm theo thứ tự in ra, svm_rfe mới bị ghi đè im lặng | `restore_from` = thứ tự giải nén, output mới nhất cuối; `requires_cfg`: `run` dừng (mã 2) nếu config.json của đầu vào không đúng bản (vd. E1_feature_selection chưa `redo_methods ∋ svm_rfe`, E2_E3 còn tracemalloc); `status` in commit + redo_methods của từng thư mục đã khôi phục | không |
+| Y31 | pha B nối dòng vào `classification_per_fold.csv` bằng `to_csv(mode="a")` không khớp tiêu đề: dòng panel nối sau dòng random-k (không có cột `n_draws`) bị ghi theo vị trí → `n_features_vs_k` rơi vào cột `n_draws` (ga/bpso ở 3 cohort GPL570, svm_rfe ở 5 bộ). Các cột chỉ số đứng trước nên **không đổi** (GVHD đã kiểm) | hai cột sổ sách sai ở 1.950 dòng (svm_rfe 5 bộ, GA/BPSO 3 cohort); không ảnh hưởng bảng | `append_csv_aligned` (nối theo tiêu đề; dùng cho pha B, E1b, E4/E5, E7); `normalise_per_fold` sửa dòng cũ khi đọc lại, ghi `legacy_rows_realigned` vào config | không riêng (tự sửa khi `panels` chạy pha B) |
+
+**Không phải chạy lại:** mọi phiên đã có (đợt 1 và bổ sung đợt 1). `tables_results.zip` ngày 02/11 vẫn đúng cho mọi cột trừ
+cận CI bootstrap của E1b/E7 và cờ chuyển giao; bản `tables` mới thay thế nó.
+
+**Áp gói.** Trên `survey-v2-code` tại `0e03837`: `git am --3way survey-v3.1.7-<hash>.patch`, `python -m pytest tests -q`
+(≈ 218 test nhanh + 7 test đầu-cuối; `-m "not slow"` ≈ 30 s), `python scripts/make_kaggle_notebooks.py --check` (11 notebook),
+push, đặt `REPO_COMMIT` mới. Chạy lại `make_survey_tables.py` hai lần trên cùng đầu vào với `PYTHONHASHSEED` khác nhau phải cho
+`tables/*.csv` giống hệt (test đầu-cuối đã kiểm).
+
+**Thứ tự phiên (03–05/11):** (1) `panels` — khôi phục `redo_svm_rfe_B`; (2) `tables` — khôi phục đúng thứ tự
+`e0, sanity, e7, e2e3_merge, ablation_phaseB, redo_svm_rfe_B, panels` (`kaggle_jobs.py show tables`). Bàn giao như HANDOVER 04/11
+kèm: diff `tables/*.csv` mới so với bản 02/11 (chỉ khác CI/cờ E7 và các hàng/bảng mới), config.json có `legacy_rows_realigned`.
 
 ---
 

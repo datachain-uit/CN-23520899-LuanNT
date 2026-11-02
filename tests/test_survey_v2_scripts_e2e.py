@@ -120,6 +120,31 @@ def test_03_e1_phase_a_b(data_root):
     assert len(pf2) == n_before and set(pf2.method) == set(pf.method)
     assert pf2.groupby(["repeat", "fold", "method", "k", "model"]).size().max() == 1
     assert json.loads((db / "config.json").read_text(encoding="utf-8"))["redo_methods"] == ["l1_lr"]
+    # v3.1.7 (QĐ32): panel công bố nối vào kết quả đã có (pha A: panel cố định, gen thiếu ghi lại; pha B: --no-references)
+    panels = ["panel_girard2016", "panel_wilkerson2013"]
+    before = {f.name: f.read_bytes() for f in ck.glob("*.csv")}
+    a.main(["--datasets", COHORT, "--methods", *panels, "--redo-methods", *panels, "--repeats", "0", "--prefilter", "150"])
+    assert {f.name: f.read_bytes() for f in ck.glob("*.csv") if "_panel_" not in f.name} == before
+    sel3 = pd.read_csv(d / "selection_per_fold.csv")
+    assert set(sel3.method) == set(sel.method) | set(panels) and len(sel3) == len(sel) + 2 * 5
+    gir = sel3[sel3.method == "panel_girard2016"]
+    assert (gir.k == 42).all() and (gir.n_selected < 42).all() and gir.missing_genes.str.contains("SPINK1").all() and not gir.exact_k.any()
+    cfg3 = json.loads((d / "config.json").read_text(encoding="utf-8"))
+    assert set(panels) <= set(cfg3["methods_in_results"]) and cfg3["redo_methods"] == panels and len(cfg3["fixed_panels"]["panel_wilkerson2013"]) == 52
+    b.main(["--datasets", COHORT, "--repeats", "0", "--no-references", "--methods", *panels, "--redo-methods", *panels, "--prefilter", "150"])
+    pf3 = pd.read_csv(db / "classification_per_fold.csv")
+    assert len(pf3) == n_before + 2 * 5 and set(pf3.method) == set(pf.method) | set(panels)
+    assert (pf3[pf3.method == "panel_girard2016"].n_features_vs_k < 0).all() and pf3.groupby(["repeat", "fold", "method", "k", "model"]).size().max() == 1
+    assert set(json.loads((db / "config.json").read_text(encoding="utf-8"))["methods_in_results"]) >= set(panels)
+    # v3.1.7 (QĐ31): ablation loại 4 gen IHC trên tập nhỏ -> E1_feature_selection_noIHC / E1_classification_noIHC (bảng ở test_07)
+    abl = ["--exclude-genes", "NKX2-1", "TP63", "NAPSA", "KRT5"]
+    a.main(["--datasets", COHORT, "--methods", "f_test", "l1_lr", "--k", "2", "5", "10", "--repeats", "0", "--prefilter", "150", *abl,
+            "--out", "E1_feature_selection_noIHC"])
+    b.main(["--datasets", COHORT, "--repeats", "0", "--random-draws", "3", "--prefilter", "150", *abl,
+            "--selection-roots", str(data_root / "results" / "survey_v2" / "E1_feature_selection_noIHC"), "--out", "E1_classification_noIHC"])
+    pfn = pd.read_csv(data_root / "results" / "survey_v2" / "E1_classification_noIHC" / COHORT / "classification_per_fold.csv")
+    assert {"f_test", "l1_lr", "b0", "random_k"} == set(pfn.method) and "NKX2-1" not in set(
+        pd.read_csv(data_root / "results" / "survey_v2" / "E1_feature_selection_noIHC" / COHORT / "selected_genes.csv").gene)
 
 
 def test_04_e1b_and_e7(data_root):
@@ -141,6 +166,12 @@ def test_04_e1b_and_e7(data_root):
     assert len(pr2) == len(pr) and set(pr2.method) == set(pr.method)
     assert pr2[pr2.method == "f_test"].sort_values(["split", "subset", "n_t", "k"]).auroc.tolist() == f_before
     assert json.loads((d / "config.json").read_text(encoding="utf-8"))["redo_methods"] == ["l1_lr"]
+    # v3.1.7 (QĐ32): panel công bố trong E1b
+    _load("run_survey_e1b_learning_curve").main(["--datasets", COHORT, "--methods", "panel_girard2016", "--redo-methods", "panel_girard2016",
+                                                 "--n-t", "5", "10", "pool", "--prefilter", "120", "--random-draws", "2", "--n-jobs", "1"])
+    pr3 = pd.read_csv(d / "e1b_per_run.csv", dtype={"n_t": str})
+    assert set(pr3.method) == set(pr.method) | {"panel_girard2016"} and len(pr3[pr3.method == "panel_girard2016"]) == 60
+    assert pr3[pr3.method == "f_test"].sort_values(["split", "subset", "n_t", "k"]).auroc.tolist() == f_before
     _load("run_survey_e7_transfer_naive").main(["--datasets", COHORT, "--k", "2", "5", "--n-t", "5", "--prefilter", "120", "--n-jobs", "1"])
     e7 = pd.read_csv(data_root / "results" / "survey_v2" / "E7" / COHORT / "e7_per_run.csv", dtype={"n_t": str})
     assert set(e7.strategy) == {"source_only", "select_on_source", "pooled", "target_only"}
@@ -208,11 +239,28 @@ def test_07_tables_and_sanity(data_root):
               "provenance_manifest.json", "e1_auroc_table.tex"):
         assert (out / f).exists(), f
     tests = pd.read_csv(out / "e1_tests_vs_random_b0.csv")
-    assert {"p_nb_random_holm", "p_nb_b0_holm"} <= set(tests.columns) and tests.p_nb_random.between(0, 1).all()
+    assert {"p_nb_random_holm", "p_nb_b0_holm"} <= set(tests.columns)
+    is_panel = tests.method.str.startswith("panel_")
+    assert tests[~is_panel].p_nb_random.between(0, 1).all()
+    assert is_panel.any() and tests[is_panel].p_nb_random.isna().all() and tests[is_panel].p_nb_b0.between(0, 1).all()   # QĐ32: panel k ∉ lưới random-k
     ks = pd.read_csv(out / "e1_kstar_pooled.csv")
     assert "k_star_both" in ks.columns and "k_sequence_used" in ks.columns
     e7 = pd.read_csv(out / "e7_transfer_table.csv")
-    assert {"diff_ci_low", "p_wilcoxon_holm", "negative_transfer"} <= set(e7.columns)
+    assert {"diff_ci_low", "p_wilcoxon_holm", "negative_transfer", "ci_excludes_zero"} <= set(e7.columns)
+    assert (e7.positive_transfer == ((e7.p_wilcoxon_holm < 0.05) & (e7.diff_mean > 0))).all()      # QĐ30: cờ theo Holm
+    # v3.1.7 (QĐ31): bảng ablation IHC từ E1_classification_noIHC; (QĐ32) hàng panel công bố có trong bảng E1
+    abl = pd.read_csv(out / "e1_ablation_noihc.csv")
+    assert {"f_test", "l1_lr", "b0", "random_k"} == set(abl.method) and {"delta_mean", "delta_ci_low", "ihc_genes_per_panel"} <= set(abl.columns)
+    assert (abl[abl.method == "b0"].k == "all").all() and (out / "e1_ablation_noihc_table.tex").exists()
+    e1 = pd.read_csv(out / "e1_auroc_table.csv")
+    assert {"panel_girard2016", "panel_wilkerson2013"} <= set(e1.method) and "42" in e1.columns
+    lc = pd.read_csv(out / "e1b_learning_curves.csv")
+    assert "panel_girard2016" in set(lc.method)
+    # QĐ30: chạy lại cho bảng giống hệt (seed bootstrap không phụ thuộc tiến trình)
+    before = {f.name: f.read_bytes() for f in out.glob("*.csv")}
+    mk.main(["--e6-fraction", "0.7", "--no-figures"])
+    after = {f.name: f.read_bytes() for f in out.glob("*.csv")}
+    assert after == before
     figs = list((data_root / "results" / "survey_v2" / "figures").glob("fig_e1b_*.png")) + list((data_root / "results" / "survey_v2" / "figures").glob("fig_e7_*.png"))
     assert len(figs) >= 2
     man = json.loads((out / "provenance_manifest.json").read_text(encoding="utf-8"))

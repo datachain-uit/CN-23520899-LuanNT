@@ -39,7 +39,7 @@ from survey_v2.panels import all_fixed_panels, panel_indices  # noqa: E402
 from survey_v2.runlog import DATA_ROOT, all_versions, previous_config, results_dir, start_run, write_config  # noqa: E402
 from survey_v2.stability import nogueira, selections_to_matrix  # noqa: E402
 from scripts.build_fewshot_splits import fewshot_path  # noqa: E402
-from scripts.run_e1_classification import drop_rows_of_methods  # noqa: E402
+from scripts.run_e1_classification import append_csv_aligned, drop_rows_of_methods  # noqa: E402
 
 FIXED_PANELS = all_fixed_panels()
 RUN_KEY = ["split", "subset", "n_t", "method"]
@@ -121,7 +121,7 @@ def run_one(ds, cid, split, seed, subset, n_t, train_ids, test_ids, methods, k_l
 
 def append_csv(path: Path, rows):
     if rows:
-        pd.DataFrame(rows).to_csv(path, mode="a", index=False, header=not path.exists(), encoding="utf-8-sig")
+        append_csv_aligned(pd.DataFrame(rows), path)        # v3.1.7 (Y31): nối theo đúng thứ tự cột của tiêu đề đã có
 
 
 def fewshot_stability(genes: pd.DataFrame, universe) -> pd.DataFrame:

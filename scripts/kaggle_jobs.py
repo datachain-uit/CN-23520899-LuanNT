@@ -23,6 +23,14 @@ v3.1.6 (Review 31/10/2026, QĐ25–QĐ28): (1) việc `redo_svm_rfe_A` / `redo_s
 (random_state) ở E1 pha A/B, ablation A, E1b, E4/E5 bằng --redo-methods, giữ nguyên mọi phương pháp khác; (2) `e2_ref`,
 `e3_p1..p3`, `e2e3_merge` chạy lại ở bản này (tracemalloc và bộ nhớ tiến trình con — survey_v2/timing.py); (3) `requires`
 cho e4e5/e4_tcga/e7/tables; (4) merge-e2e3 bỏ qua tệp CSV rỗng; (5) mỗi lần `run` ghi `logs/pip_freeze_<JOB>.txt`.
+
+v3.1.7 (Review 02/11/2026, QĐ30–QĐ32): (1) `restore_from` là THỨ TỰ GIẢI NÉN trong notebook — zip sau ghi đè zip trước, nên
+output mới nhất (vd. `redo_svm_rfe_A`, `redo_svm_rfe_B`, `panels`) đứng CUỐI danh sách (Phát hiện 2 của HANDOVER 04/11);
+(2) `requires_cfg`: điều kiện trên config.json của đầu vào (vd. E1_feature_selection đã chọn lại svm_rfe, E2_E3 không
+tracemalloc) — `run` dừng với mã 2 nếu không đạt, nên khôi phục sai thứ tự bị phát hiện trước khi chạy; (3) việc `panels`:
+E1 pha A/B và E1b cho hai panel công bố (Girard 2016, Wilkerson 2013; survey_v2/panels/published_panels.csv) nối vào kết
+quả đã có; (4) `tables` chạy lại sau `panels` (bảng ablation IHC và CI bootstrap tái lập — scripts/make_survey_tables.py);
+(5) `status` in commit và redo_methods của từng thư mục kết quả đã khôi phục.
 """
 
 from __future__ import annotations
@@ -46,6 +54,18 @@ TCGA = C.SOURCE_DATASET
 GEO = tuple(C.FEWSHOT_COHORTS)
 GPL570 = tuple(C.WRAPPER_DATASETS)
 IHC_GENES = ("NKX2-1", "TP63", "NAPSA", "KRT5")
+
+
+def _published_panel_methods() -> list[str]:
+    """Tên method của các panel công bố (panel_<tên>) đọc từ survey_v2/panels/published_panels.csv (v3.1.7)."""
+    try:
+        from survey_v2.panels import published_panels
+        return sorted(published_panels())
+    except Exception:  # noqa: BLE001 — thiếu tệp/gói: việc panels không có phương pháp, kiểm tra ở cmd_run
+        return []
+
+
+PUBLISHED_PANELS = _published_panel_methods()
 E3_PARTS = {  # chia E3 theo chi phí để mỗi phiên < 12 giờ; mỗi phần tự hiệu chuẩn với phiên tham chiếu (QĐ18)
     "p1": ["f_test", "mutual_info", "mrmr", "l1_lr", "ktsp", "abess"],
     "p2": ["elastic_net", "rf_importance", "stability_selection"],
@@ -62,7 +82,8 @@ class Job:
     outputs: list                  # thư mục kết quả (tương đối results/survey_v2) phải có config.json traceable
     finalize: list = field(default_factory=list)
     requires: list = field(default_factory=list)    # tệp (tương đối results/survey_v2) phải có trước khi chạy
-    restore_from: list = field(default_factory=list)  # tên các việc mà output phải gắn làm Input trước
+    restore_from: list = field(default_factory=list)  # output các việc phải gắn làm Input, THEO THỨ TỰ GIẢI NÉN (mới nhất cuối)
+    requires_cfg: list = field(default_factory=list)  # (config.json tương đối, khoá, giá trị): bằng nhau, hoặc thuộc danh sách
     parallel: int = 4
     exclusive: bool = False
     hours: str = ""
@@ -143,10 +164,15 @@ def build_jobs() -> dict[str, Job]:
                  restore_from=["e1_phaseB_geo"] + [f"wrap_{d}" for d in GPL570], parallel=3, hours="~1"))
     J.append(Job("e7", "3 · 08/11", "E7 chuyển giao đơn giản (4 chiến lược × 5 k × 20 lần chạy × n_T ∈ {5, 10, 20})",
                  [["scripts/run_survey_e7_transfer_naive.py", "--n-jobs", "4"]], [f"E7/{d}" for d in GEO], parallel=1, hours="2–4"))
-    J.append(Job("tables", "sau mỗi đợt", "Bảng, hình, provenance_manifest (E6 ghép tại k = 10)",
+    J.append(Job("tables", "sau mỗi đợt", "Bảng, hình, provenance_manifest (E6 ghép tại k = 10; v3.1.7: + bảng ablation IHC, "
+                 "panel công bố, CI bootstrap tái lập)",
                  [["scripts/make_survey_tables.py"]], ["tables"], parallel=1,
-                 requires=[f"E1_classification/{d}/classification_per_fold.csv" for d in C.DATASETS] + [f"E0/{d}/e0_signal_check.csv" for d in C.DATASETS],
-                 restore_from=["(mọi việc đã xong)"], hours="<0,5"))
+                 requires=[f"E1_classification/{d}/classification_per_fold.csv" for d in C.DATASETS] + [f"E0/{d}/e0_signal_check.csv" for d in C.DATASETS]
+                 + [f"E1_classification_noIHC/{d}/classification_per_fold.csv" for d in C.DATASETS] + ["E2_E3/e2_cost_point.csv"],
+                 requires_cfg=[(f"E1_feature_selection/{d}/config.json", "redo_methods", "svm_rfe") for d in C.DATASETS]
+                 + [(f"E1_classification/{d}/config.json", "methods_in_results", m) for d in C.DATASETS for m in PUBLISHED_PANELS]
+                 + [("E2_E3/config.json", "timing_tracemalloc", False), ("E2_E3/config.json", "peak_source", "VmHWM")],
+                 restore_from=["e0", "sanity", "e7", "e2e3_merge", "ablation_phaseB", "redo_svm_rfe_B", "panels"], hours="<0,5"))
     # ----------------------------------------------------------------- v3.1.6: chọn lại SVM-RFE (QĐ25; random_state) — 02–04/11
     abl = ["--exclude-genes", *IHC_GENES, "--out", "E1_feature_selection_noIHC"]
     redo = ["--redo-methods", "svm_rfe"]
@@ -168,8 +194,22 @@ def build_jobs() -> dict[str, Job]:
                  requires=[f"E1_feature_selection/{d}/selected_genes.csv" for d in C.DATASETS]
                  + [f"E1_classification/{d}/classification_per_fold.csv" for d in C.DATASETS]
                  + [f"E1b/{d}/e1b_per_run.csv" for d in GEO] + ["E4_E5/gse37745/e4_selected_genes.csv", f"E4_E5/{TCGA}/e4_selected_genes.csv"],
-                 restore_from=["redo_svm_rfe_A", "e1_phaseB_wrappers", "e1_phaseB_geo", "e1_phaseB_tcga", "fewshot_e1b", "e4e5_gse37745", "e4_tcga"],
+                 requires_cfg=[(f"E1_feature_selection/{d}/config.json", "redo_methods", "svm_rfe") for d in C.DATASETS],
+                 restore_from=["e1_phaseB_wrappers", "e1_phaseB_geo", "e1_phaseB_tcga", "fewshot_e1b", "e4e5_gse37745", "e4_tcga", "redo_svm_rfe_A"],
                  parallel=3, hours="2–3"))
+    # ----------------------------------------------------------------- v3.1.7: panel công bố (QĐ32) — 05/11
+    J.append(Job("panels", "P · 05/11", "Panel công bố Girard 2016 + Wilkerson 2013 (survey_v2/panels/published_panels.csv): E1 pha A "
+                 "(panel cố định, gen thiếu ghi vào config) và pha B 5 bộ, E1b 4 cohort; nối vào kết quả đã có (phương pháp khác giữ nguyên)",
+                 [_fs("--datasets", d, "--methods", *PUBLISHED_PANELS, "--redo-methods", *PUBLISHED_PANELS) for d in C.DATASETS],
+                 [f"E1_feature_selection/{d}" for d in C.DATASETS] + [f"E1_classification/{d}" for d in C.DATASETS] + [f"E1b/{d}" for d in GEO],
+                 finalize=[_clf("--datasets", d, "--no-references", "--methods", *PUBLISHED_PANELS, "--redo-methods", *PUBLISHED_PANELS) for d in C.DATASETS]
+                 + [["scripts/run_survey_e1b_learning_curve.py", "--datasets", d, "--methods", *PUBLISHED_PANELS, "--redo-methods", *PUBLISHED_PANELS,
+                     "--n-jobs", "2"] for d in GEO],
+                 requires=[f"E1_feature_selection/{d}/selected_genes.csv" for d in C.DATASETS]
+                 + [f"E1_classification/{d}/classification_per_fold.csv" for d in C.DATASETS] + [f"E1b/{d}/e1b_per_run.csv" for d in GEO],
+                 requires_cfg=[(f"E1_feature_selection/{d}/config.json", "redo_methods", "svm_rfe") for d in C.DATASETS]
+                 + [(f"E1_classification/{d}/config.json", "redo_methods", "svm_rfe") for d in C.DATASETS],
+                 restore_from=["redo_svm_rfe_B"], parallel=4, hours="<0,5"))
     # ----------------------------------------------------------------- Ablation loại 4 gen IHC (09–10/11, khoá luận)
     J.append(Job("ablation_phaseA_geo", "4 · 10/11", "Ablation không IHC: pha A 4 cohort GEO", [_fs("--datasets", d, *abl) for d in GEO],
                  [f"E1_feature_selection_noIHC/{d}" for d in GEO], hours="3–6"))
@@ -181,7 +221,8 @@ def build_jobs() -> dict[str, Job]:
                        "--out", "E1_classification_noIHC") for d in C.DATASETS],
                  [f"E1_classification_noIHC/{d}" for d in C.DATASETS],
                  requires=[f"E1_feature_selection_noIHC/{d}/selected_genes.csv" for d in C.DATASETS],
-                 restore_from=["ablation_phaseA_geo", "ablation_phaseA_tcga"], hours="3–6"))
+                 requires_cfg=[(f"E1_feature_selection_noIHC/{d}/config.json", "redo_methods", "svm_rfe") for d in C.DATASETS],
+                 restore_from=["ablation_phaseA_geo", "ablation_phaseA_tcga", "redo_svm_rfe_A"], hours="3–6"))
     return {j.name: j for j in J}
 
 
@@ -217,8 +258,23 @@ def command(argv: list[str]) -> list[str]:
 
 
 def check_requires(job: Job) -> list[str]:
+    """Tệp đầu vào còn thiếu + điều kiện config.json không đạt (v3.1.7, requires_cfg) — mô tả từng mục."""
     root = results_root()
-    return [r for r in job.requires if not (root / r).exists()]
+    missing = [r for r in job.requires if not (root / r).exists()]
+    for rel, key, expected in job.requires_cfg:
+        path = root / rel
+        if not path.exists():
+            missing.append(f"{rel}: thiếu (cần {key} = {expected!r})")
+            continue
+        try:
+            value = json.loads(path.read_text(encoding="utf-8")).get(key)
+        except (OSError, ValueError) as exc:
+            missing.append(f"{rel}: không đọc được ({exc})")
+            continue
+        ok = (expected in value) if isinstance(value, (list, tuple, set)) else (value == expected)
+        if not ok:
+            missing.append(f"{rel}: {key} = {value!r}, cần {expected!r} (khôi phục đúng output và đúng thứ tự: {', '.join(job.restore_from)})")
+    return missing
 
 
 TIMEOUT_CODE = 124
@@ -404,8 +460,10 @@ def cmd_plan():
 
 def cmd_show(job: Job):
     print(f"{job.name} — {job.what}\nđợt {job.batch}; song song {job.parallel}; exclusive {job.exclusive}; ước lượng {job.hours} giờ")
-    print("khôi phục (gắn output làm Kaggle Input):", ", ".join(job.restore_from) or "—")
+    print("khôi phục (gắn output làm Kaggle Input, ĐÚNG THỨ TỰ — zip sau ghi đè zip trước):", ", ".join(job.restore_from) or "—")
     print("cần có:", ", ".join(job.requires) or "—")
+    if job.requires_cfg:
+        print("config.json cần đạt:", "; ".join(f"{r}: {k} ∋ {v!r}" for r, k, v in job.requires_cfg))
     for s in job.shards:
         print("  python", " ".join(render(s)) if os.environ.get("KLTN_DATA_ROOT") else " ".join(s))
     for s in job.finalize:
@@ -416,7 +474,11 @@ def cmd_show(job: Job):
 def cmd_run(job: Job, parallel: int | None, log_dir: Path, max_hours: float | None = None) -> int:
     missing = check_requires(job)
     if missing:
-        print("THIẾU đầu vào (gắn output các việc " + ", ".join(job.restore_from) + " làm Input):\n  " + "\n  ".join(missing))
+        print("THIẾU đầu vào hoặc đầu vào sai bản (gắn output các việc " + ", ".join(job.restore_from)
+              + " làm Input, đúng thứ tự):\n  " + "\n  ".join(missing))
+        return 2
+    if job.name == "panels" and not PUBLISHED_PANELS:
+        print("panels: survey_v2/panels/published_panels.csv chưa có panel nào")
         return 2
     commit = head_commit()
     deadline = time.time() + max_hours * 3600 if max_hours else None
@@ -452,6 +514,23 @@ def cmd_status():
         have = [o for o in j.outputs if (root / o / "config.json").exists()]
         mark = "xong" if j.outputs and len(have) == len(j.outputs) else (f"{len(have)}/{len(j.outputs)}" if j.outputs else "—")
         print(f"{j.batch:12s} {j.name:24s} {mark}")
+    # v3.1.7: bản nào đang nằm trong results/ (commit, redo_methods) — để thấy ngay khi khôi phục sai thứ tự
+    if root.exists():
+        print("thư mục kết quả hiện có (commit, redo_methods / methods_in_results):")
+        for cfg_path in sorted(root.glob("*/config.json")) + sorted(root.glob("*/*/config.json")):
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            rel = cfg_path.parent.relative_to(root).as_posix()
+            extra = ""
+            if cfg.get("redo_methods"):
+                extra += f" redo={cfg['redo_methods']}"
+            if cfg.get("methods_in_results"):
+                extra += f" n_methods={len(cfg['methods_in_results'])}"
+            if "timing_tracemalloc" in cfg:
+                extra += f" tracemalloc={cfg['timing_tracemalloc']} peak={cfg.get('peak_source')}"
+            print(f"  {rel:50s} {str(cfg.get('commit_hash'))[:7]}{extra}")
 
 
 def main(argv=None):

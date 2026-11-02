@@ -101,8 +101,18 @@ EXPERIMENTS = [
         "Gộp mọi kết quả đã có → `tables/*.csv|*.tex`, `figures/*`, `provenance_manifest.json`; E6 ghép tại k = 10.\n"
         "Chỉ dùng output của các phiên có `JOB_OK` cùng một commit.",
         ["tables"],
-        "Sau mỗi đợt: khôi phục **toàn bộ** zip output đã có (thêm tất cả vào Input, liệt kê trong `RESTORE_INPUTS`). "
+        "Khôi phục đúng danh sách và **đúng thứ tự** cột *Khôi phục* (zip sau ghi đè zip trước; `redo_svm_rfe_B` rồi `panels` ở cuối). "
+        "v3.1.7: chạy lại sau `panels` → thêm bảng ablation IHC (`e1_ablation_noihc*`), hàng panel công bố, CI bootstrap tái lập (QĐ30–QĐ32). "
         "Hoặc tải các zip về máy rồi chạy `python scripts/make_survey_tables.py`."),
+    Experiment(
+        "kaggle_panels.ipynb", "Panel công bố (v3.1.7, QĐ32: Girard 2016, Wilkerson 2013)",
+        "Hai panel cố định trong `survey_v2/panels/published_panels.csv` chạy qua E1 pha A (panel cố định, gen thiếu ghi vào config), "
+        "pha B (LR-L2) và E1b, nối vào kết quả đã có; mọi phương pháp khác giữ nguyên (`--redo-methods` chỉ hai panel).\n"
+        "Nghiệm thu: `JOB_OK`; config.json của E1_feature_selection/E1_classification/E1b có `methods_in_results` chứa "
+        "`panel_girard2016`, `panel_wilkerson2013` và `redo_methods` = hai panel; các dòng khác trùng từng byte với `redo_svm_rfe_B`.",
+        ["panels"],
+        "Một phiên (< 0,5 giờ). Khôi phục output `redo_svm_rfe_B` (đã có E1 pha A/B, E1b, E4/E5, wrapper). Sau đó chạy lại `tables` "
+        "(notebook E6) với `redo_svm_rfe_B` rồi `panels` ở cuối danh sách khôi phục."),
     Experiment(
         "kaggle_E7_transfer.ipynb", "E7 — chuyển giao đơn giản TCGA → GEO",
         "4 chiến lược (source_only, select_on_source, pooled, target_only) × 5 k × 20 lần chạy × n_T ∈ {5, 10, 20} trên 4 cohort "
@@ -160,7 +170,9 @@ def build(exp: Experiment, runner: dict, jobs) -> dict:
             f"## Thứ tự phiên\n\n{exp.order}\n\n"
             "## Mỗi phiên\n\n"
             "1. Add Input: **experiment-data-v3** (bản 29/10 sau QC) + output các việc ở cột *Khôi phục*.\n"
-            "2. Ô cấu hình: `JOB`, `RESTORE_INPUTS`, `REPO_COMMIT` (giữ một commit cho mọi phiên của một đợt).\n"
+            "2. Ô cấu hình: `JOB`, `RESTORE_INPUTS` (**đúng thứ tự cột Khôi phục** — zip sau ghi đè zip trước, output mới nhất cuối), "
+            "`REPO_COMMIT` (giữ một commit cho mọi phiên của một đợt). `kaggle_jobs.py run` dừng (mã 2) nếu config.json của đầu vào "
+            "không đúng bản (`requires_cfg`, v3.1.7).\n"
             "3. Save Version → Save & Run All. Output: `/kaggle/working/<JOB>_results.zip` → lưu thành Dataset `kltn-<job>`.\n"
             "4. Mã 124 (quá `MAX_HOURS`): phiên mới cùng JOB, khôi phục zip vừa lưu — script tự tiếp tục từ checkpoint.\n")
     cells[0]["source"] = _lines(head)
