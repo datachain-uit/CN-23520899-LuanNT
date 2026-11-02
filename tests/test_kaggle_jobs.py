@@ -157,6 +157,24 @@ def test_restore_order_requires_cfg_and_panels(tmp_path, monkeypatch):
         assert kj.JOBS[name].requires_cfg, name
 
 
+def test_tables_requires_cfg_accepts_panels_output(tmp_path, monkeypatch):
+    """v3.1.7a: `tables` chạy sau `panels` — config.json của E1_feature_selection khi đó có redo_methods = hai panel.
+    Điều kiện của `tables` phải đạt với đúng output của `panels` và vẫn chặn khi bản cũ (chưa có panel) ghi đè."""
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    root = tmp_path / "results" / "survey_v2"
+    job = kj.JOBS["tables"]
+    fs_rules = [r for r in job.requires_cfg if r[0].startswith("E1_feature_selection/")]
+    assert fs_rules and all(v in kj.PUBLISHED_PANELS for _, _, v in fs_rules)
+    for redo, ok in ((list(kj.PUBLISHED_PANELS), True), (["svm_rfe"], False)):
+        for d in kj.C.DATASETS:
+            (root / "E1_feature_selection" / d).mkdir(parents=True, exist_ok=True)
+            (root / "E1_feature_selection" / d / "config.json").write_text(json.dumps({"redo_methods": redo}), encoding="utf-8")
+        msgs = [m for m in kj.check_requires(job) if m.startswith("E1_feature_selection/")]
+        assert (msgs == []) is ok, msgs
+    # đầu vào của `panels` vẫn phải là bản svm_rfe đã chọn lại
+    assert all(v == "svm_rfe" for r, k, v in kj.JOBS["panels"].requires_cfg if r.startswith("E1_feature_selection/"))
+
+
 def test_pip_freeze_written(tmp_path):
     out = kj.write_pip_freeze(kj.JOBS["sanity"], tmp_path)
     assert out is not None and out.exists() and out.read_text(encoding="utf-8").startswith("# python ")

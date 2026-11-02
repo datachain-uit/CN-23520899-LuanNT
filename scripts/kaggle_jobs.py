@@ -169,7 +169,9 @@ def build_jobs() -> dict[str, Job]:
                  [["scripts/make_survey_tables.py"]], ["tables"], parallel=1,
                  requires=[f"E1_classification/{d}/classification_per_fold.csv" for d in C.DATASETS] + [f"E0/{d}/e0_signal_check.csv" for d in C.DATASETS]
                  + [f"E1_classification_noIHC/{d}/classification_per_fold.csv" for d in C.DATASETS] + ["E2_E3/e2_cost_point.csv"],
-                 requires_cfg=[(f"E1_feature_selection/{d}/config.json", "redo_methods", "svm_rfe") for d in C.DATASETS]
+                 # v3.1.7a: sau `panels`, E1_feature_selection/*/config.json ghi redo_methods = hai panel (không còn svm_rfe);
+                 # việc `panels` đã đòi redo_methods ∋ svm_rfe ở đầu vào của nó, nên redo_methods ∋ panel_* bảo đảm cả chuỗi.
+                 requires_cfg=[(f"E1_feature_selection/{d}/config.json", "redo_methods", m) for d in C.DATASETS for m in PUBLISHED_PANELS]
                  + [(f"E1_classification/{d}/config.json", "methods_in_results", m) for d in C.DATASETS for m in PUBLISHED_PANELS]
                  + [("E2_E3/config.json", "timing_tracemalloc", False), ("E2_E3/config.json", "peak_source", "VmHWM")],
                  restore_from=["e0", "sanity", "e7", "e2e3_merge", "ablation_phaseB", "redo_svm_rfe_B", "panels"], hours="<0,5"))
