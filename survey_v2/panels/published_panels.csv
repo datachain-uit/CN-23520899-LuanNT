@@ -3,4 +3,104 @@
 # ĐỘI CODE ĐIỀN: danh sách gen của Girard et al. 2016 (Clin Cancer Res 22(19):4880, phần AC vs SCC) và
 # Wilkerson et al. 2013 (J Mol Diagn 15(4):485) lấy TỪ BÀI GỐC (bảng/bổ sung), ghi DOI vào cột source.
 # Gen không có trên nền tảng sẽ được ghi vào config (missing) và panel được đánh giá với phần còn lại (cờ complete = false).
+# Điền 02/11/2026 (Y28) từ bài gốc:
+#   girard2016 = 42 gen chữ ký ADC-SCC: Girard et al. 2016 Clin Cancer Res 22(19):4880-4889 — Fig. 1B (heatmap chữ ký ADC-SCC; 21 gen cao ở ADC + 21 gen cao ở SCC;
+#     cùng danh sách với Supplementary Table S1). Không gồm 20 gen tumor-vs-nonmalignant. NAPSA và SOX2 không thuộc chữ ký (chú thích * ở Fig. 1A).
+#   wilkerson2013 = 52 marker gene của Table 1 Wilkerson et al. 2013 J Mol Diagn 15(4):485-497 (bộ HEP 4 lớp; bỏ 5 gen housekeeping CFL1 EEF1A1 RPL10 RPL28 RPL37A).
+#     Ký hiệu cũ đổi sang HGNC: TITF1 -> NKX2-1; TCF2 -> HNF1B; TUBA1 -> TUBA4A (cần đối chiếu lại TUBA1 với HGNC/mồi PCR).
+#   Gen thiếu theo nền tảng (do code ghi vào config): girard2016 — GPL570 thiếu ABCC6, KRT6C, KRT17; GPL6884 thiếu PNCK; TCGA đủ. wilkerson2013 — đủ trên cả 3 nền tảng sau khi đổi ký hiệu.
 panel,gene,source
+girard2016,HNF1B,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,SPINK1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,LGSN,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,PRR15L,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,CLDN3,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,SMPDL3B,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,FMO5,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,RORC,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,TESC,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,CDH15,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,KCNK5,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,HPN,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,STK32A,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,NKX2-1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,ABCC6,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,ACSL5,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,SFTA2,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,ALDH3B1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,CAPN8,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,DPP4,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,GOLT1A,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
+girard2016,SOX15,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,COL7A1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,PNCK,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,DST,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,FAM83B,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,DSC3,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,DAPL1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,KRT6C,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,KRT13,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,KRT16,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,SERPINB5,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,VSNL1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,DSG3,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,CLCA2,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,KRT17,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,KRT6B,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,PKP1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,CALML3,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,TP63,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,KRT6A,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+girard2016,KRT5,doi:10.1158/1078-0432.CCR-15-2900 Fig1B SCC
+wilkerson2013,ABCC5,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,ACVR1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,ALDH3B1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,ANTXR1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,BMP7,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CACNB1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CAPG,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CBX1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CDH5,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CDKN2C,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CHGA,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CIB1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CLEC3B,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,CYB5B,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,DOK1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,DSC3,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,FEN1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,FOXH1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,GJB5,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,HOXD1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,HPN,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,HYAL2,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,ICA1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,ICAM5,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,INSM1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,ITGA6,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,LGALS3,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,LIPE,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,LRP10,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,MAPRE3,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,ME3,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,MGRN1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,MYBPH,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,MYO7A,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,NFIL3,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,PAICS,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,PAK1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,PECAM1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,PIK3C2A,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,PLEKHA6,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,PSMD14,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,SCD5,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,SFN,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,SIAH2,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,SNAP91,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,STMN1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,HNF1B,doi:10.1016/j.jmoldx.2013.03.007 Table1 (bài gốc: TCF2)
+wilkerson2013,TCP1,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,TFAP2A,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,NKX2-1,doi:10.1016/j.jmoldx.2013.03.007 Table1 (bài gốc: TITF1)
+wilkerson2013,TRIM29,doi:10.1016/j.jmoldx.2013.03.007 Table1
+wilkerson2013,TUBA4A,doi:10.1016/j.jmoldx.2013.03.007 Table1 (bài gốc: TUBA1)
