@@ -8,7 +8,8 @@
 #     cùng danh sách với Supplementary Table S1). Không gồm 20 gen tumor-vs-nonmalignant. NAPSA và SOX2 không thuộc chữ ký (chú thích * ở Fig. 1A).
 #   wilkerson2013 = 52 marker gene của Table 1 Wilkerson et al. 2013 J Mol Diagn 15(4):485-497 (bộ HEP 4 lớp; bỏ 5 gen housekeeping CFL1 EEF1A1 RPL10 RPL28 RPL37A).
 #     Ký hiệu cũ đổi sang HGNC: TITF1 -> NKX2-1; TCF2 -> HNF1B; TUBA1 -> TUBA4A (cần đối chiếu lại TUBA1 với HGNC/mồi PCR).
-#   Gen thiếu theo nền tảng (do code ghi vào config): girard2016 — GPL570 thiếu ABCC6, KRT6C, KRT17; GPL6884 thiếu PNCK; TCGA đủ. wilkerson2013 — đủ trên cả 3 nền tảng sau khi đổi ký hiệu.
+#   Gen thiếu theo nền tảng (do code ghi vào config; kiểm lại 02/11 bằng scripts/check_panel_coverage.py, xem <data_root>/qc/panel_gene_coverage.csv):
+#     girard2016 — GPL570 thiếu ABCC6, KRT6C, KRT17; GPL6884 thiếu PNCK; TCGA đủ. wilkerson2013 — GPL570 thiếu CLEC3B, TCP1; GPL6884 và TCGA đủ.
 panel,gene,source
 girard2016,HNF1B,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
 girard2016,SPINK1,doi:10.1158/1078-0432.CCR-15-2900 Fig1B ADC
