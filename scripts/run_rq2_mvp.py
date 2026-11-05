@@ -33,7 +33,7 @@ from survey_v2 import config as C  # noqa: E402
 from survey_v2.classify import evaluate_panel  # noqa: E402
 from survey_v2.data import load_dataset, sha256, variance_prefilter  # noqa: E402
 from survey_v2.fewshot import build_fewshot_manifest, fewshot_runs, n_t_sort_key, validate_fewshot_manifest  # noqa: E402
-from survey_v2.mvp import EARLY_SEED, EARLY_TARGET_FRACTION, GAMMA_MARGIN, PI_EPSILON, early_split, gamma_path, pick_gamma, select_weighted, source_stability  # noqa: E402
+from survey_v2.mvp import EARLY_SEED, EARLY_TARGET_FRACTION, GAMMA_MARGIN, L1_C_GRID_RULE, PI_EPSILON, early_split, gamma_path, pick_gamma, select_weighted, source_stability  # noqa: E402
 from survey_v2.runlog import DATA_ROOT, all_versions, results_dir, start_run, write_config  # noqa: E402
 from survey_v2.transfer import TransferContext  # noqa: E402
 from scripts.build_fewshot_splits import fewshot_path  # noqa: E402
@@ -186,7 +186,7 @@ def run_target(args, prov, source, ds, out: Path, path: Path, t_all: float, extr
         append_csv(out / "rq2_mvp_selected_genes.csv", gene_rows)
         append_csv(out / "rq2_mvp_scores.csv", score_rows)
     cfg = {"experiment": "RQ2_mvp", "dataset": name, "role": C.DATASETS.get(name), "source": args.source, "source_sha256": source.files_sha256,
-           "n_source": source.n, "gene_space_size": int(len(ctx.genes)), "k_grid": args.k, "gamma_grid": args.gamma, "gamma_rule": args.gamma_rule, "gamma_margin": GAMMA_MARGIN,
+           "n_source": source.n, "gene_space_size": int(len(ctx.genes)), "k_grid": args.k, "gamma_grid": args.gamma, "gamma_rule": args.gamma_rule, "gamma_margin": GAMMA_MARGIN, "l1_c_grid_rule": L1_C_GRID_RULE,
            "n_t_levels": args.n_t, "pi_epsilon": PI_EPSILON, "prefilter_p0": args.prefilter, "prefilter_rule": PREFILTER_RULE,
            "source_pi_file": str(pi_path), "source_pi_sha256": sha256(pi_path),
            "fewshot_splits_file": str(path), "fewshot_splits_sha256": sha256(path),

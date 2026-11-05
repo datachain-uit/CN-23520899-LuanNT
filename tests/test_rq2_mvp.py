@@ -393,7 +393,53 @@ def test_main_early_tcga_compares_three_arms_without_target_leak(data_root):
     assert pick("mvp_m5").auroc_mean == pytest.approx(rows[rows.gamma_rule == "m5_cv"].auroc.mean())
     cfg = json.loads((out / "config.json").read_text(encoding="utf-8"))
     assert cfg["experiment"] == "RQ2_mvp_early" and cfg["early_seed"] == 42 and cfg["n_source"] == int((split.role == "source").sum())
-    assert cfg["early_split_sha256"] and cfg["fewshot_splits_sha256"]
+    assert cfg["early_split_sha256"] and cfg["fewshot_splits_sha256"] and "max(w_j)" in cfg["l1_c_grid_rule"]
     mvp.main(argv)                                                 # chạy lại: resume, không thêm dòng
     assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
     assert len(pd.read_csv(out / "rq2_early_select_on_source.csv")) == len(sos)
+
+
+# --- Lưới C theo trọng số: chia cột cho w_j làm gen có π nhỏ không với tới được trong lưới cũ (rq2_early 05/11) -------------
+def test_weighted_c_grid_keeps_base_grid_and_scales_ceiling_with_largest_weight():
+    from survey_v2.mvp import BASE_C_GRID, penalty_weights, weighted_c_grid
+
+    assert np.array_equal(BASE_C_GRID, np.logspace(-3, 2, 26))
+    pi = np.array([0.0, 0.5, 1.0])
+    assert np.array_equal(weighted_c_grid(penalty_weights(pi, 0.0)), BASE_C_GRID)      # γ = 0: đúng lưới của E1b
+    for gamma, top in ((0.5, 100 * 20**0.5), (1.0, 2000.0), (2.0, 40000.0)):
+        grid = weighted_c_grid(penalty_weights(pi, gamma))
+        assert np.array_equal(grid[:26], BASE_C_GRID) and grid[-1] == pytest.approx(top) and (np.diff(grid) > 0).all()
+        assert np.diff(np.log10(grid)).max() <= 0.2 + 1e-9
+
+
+def _weighted_problem():
+    """10 mẫu, 2.000 gen nhiễu; như TCGA: 4 gen π cao, vài gen π nhỏ, còn lại π = 0 nên w_j = 20^γ."""
+    rng = np.random.default_rng(7)
+    X, y = rng.normal(size=(10, 2000)), np.repeat([0, 1], 5)
+    pi = np.zeros(2000)
+    pi[:4] = 1.0
+    pi[4:12] = np.linspace(0.02, 0.4, 8)
+    return X, y, pi
+
+
+def test_weighted_selection_reaches_k_without_unweighted_ftest_fill():
+    """Hỏng nếu lưới dừng ở C = 100: L1 không đủ k hệ số nên F-test (không đổi khi chia cột cho w_j) chọn thay, bỏ qua π."""
+    from survey_v2.mvp import select_weighted
+
+    X, y, pi = _weighted_problem()
+    for gamma in (1.0, 2.0):
+        sel = select_weighted(X, y, pi, gamma, [10], seed=1)
+        assert sel.info["n_filled"][10] == 0, gamma
+        assert set(range(4)) <= set(sel.panels[10].tolist()), gamma          # 4 gen π cao được phạt nhẹ nhất nên phải có mặt
+
+
+def test_extended_grid_leaves_panels_reachable_on_base_grid_unchanged():
+    """Phần lưới cũ giữ nguyên và được xét trước: k đã đạt được trên lưới cũ thì panel không đổi."""
+    from survey_v2.methods import select_sparse_exact_k, zscore_apply, zscore_fit
+    from survey_v2.mvp import BASE_C_GRID, penalty_weights, select_weighted
+
+    X, y, pi = _weighted_problem()
+    w = penalty_weights(pi, 1.0)
+    old = select_sparse_exact_k(zscore_apply(X, *zscore_fit(X)) / w, y, [2], "l1_lr", seed=1, c_grid=BASE_C_GRID)
+    assert old.info["n_filled"][2] == 0
+    assert np.array_equal(select_weighted(X, y, pi, 1.0, [2], seed=1).panels[2], old.panels[2])

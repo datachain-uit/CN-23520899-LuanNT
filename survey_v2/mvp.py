@@ -26,6 +26,9 @@ INNER_FOLDS = 5
 INNER_REPEATS_LARGE_N = 3      # n_T ≥ 20 mỗi lớp: CV 5 fold lặp 3 lần
 EARLY_TARGET_FRACTION = 0.30   # thử nghiệm sớm: 70 % nguồn giả / 30 % đích giả theo bệnh nhân (Review 03/11 Bảng 8 bước 8)
 EARLY_SEED = 42
+BASE_C_GRID = np.logspace(-3, 2, 26)   # lưới mặc định của select_sparse_exact_k (dùng ở E1b)
+C_GRID_MAX_LOG_STEP = 0.2              # bước log10 của phần mở rộng, bằng bước của BASE_C_GRID
+L1_C_GRID_RULE = "logspace(-3, 2, 26); phần mở rộng tới 100 * max(w_j) với cùng bước khi max(w_j) > 1"
 
 
 def penalty_weights(pi: np.ndarray, gamma: float, eps: float = PI_EPSILON) -> np.ndarray:
@@ -40,10 +43,24 @@ def source_stability(ctx, cid: int) -> tuple[np.ndarray, float]:
     return np.asarray(info["pi"], dtype=float), float(info["C"])
 
 
+def weighted_c_grid(w: np.ndarray) -> np.ndarray:
+    """Lưới C cho L1 trên X / w. Gen có trọng số w_j cần C lớn gấp w_j mới chịu mức phạt như γ = 0 tại C đó, nên trần là 100·max(w_j).
+
+    Nếu giữ trần 100, L1 không với tới các gen có π nhỏ và panel bị F-test bổ sung; F-test không đổi khi chia cột nên bỏ qua π.
+    BASE_C_GRID đứng đầu và không đổi: γ = 0 trùng E1b, k đạt được trên lưới cũ thì panel không đổi.
+    """
+    extra = float(np.log10(np.max(w)))
+    if extra <= 0:
+        return BASE_C_GRID
+    n = int(np.ceil(extra / C_GRID_MAX_LOG_STEP))
+    return np.concatenate([BASE_C_GRID, np.logspace(2, 2 + extra, n + 1)[1:]])
+
+
 def select_weighted(X: np.ndarray, y: np.ndarray, pi: np.ndarray, gamma: float, k_list, seed: int) -> Selection:
     """Chọn đúng k gen trên L_T: z-score theo L_T (M7), chia cột cho w_j, L1-LR đúng k. Chỉ số cột theo ma trận X đưa vào."""
     mu, sd = zscore_fit(X)
-    return select_sparse_exact_k(zscore_apply(X, mu, sd) / penalty_weights(pi, gamma), y, k_list, "l1_lr", seed=seed)
+    w = penalty_weights(pi, gamma)
+    return select_sparse_exact_k(zscore_apply(X, mu, sd) / w, y, k_list, "l1_lr", seed=seed, c_grid=weighted_c_grid(w))
 
 
 def early_split(ds, target_fraction: float = EARLY_TARGET_FRACTION, seed: int = EARLY_SEED) -> tuple:
