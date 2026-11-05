@@ -8,13 +8,20 @@ nên sẽ triệt tiêu trọng số.
 from __future__ import annotations
 
 import numpy as np
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold
 
 from . import config as C
+from .classify import evaluate_panel, probability_metrics
+from .data import variance_prefilter
 from .methods import Selection, rank_stability_selection, select_sparse_exact_k, zscore_apply, zscore_fit
 
 PI_EPSILON = 0.05
 SOURCE_K_MAX = 10              # q ≈ 2·k_max hệ số của stability selection; cố định, không phụ thuộc --k
 SOURCE_SEED_TAG = 8            # seed_for(cid, 0, 0, 8), Review 03/11 Bảng 8 bước 2
+GAMMA_MARGIN = 0.01            # M5: γ lớn hơn chỉ thắng khi giảm log-loss OOF ≥ 0,01
+INNER_FOLDS = 5
+INNER_REPEATS_LARGE_N = 3      # n_T ≥ 20 mỗi lớp: CV 5 fold lặp 3 lần
 
 
 def penalty_weights(pi: np.ndarray, gamma: float, eps: float = PI_EPSILON) -> np.ndarray:
@@ -33,3 +40,55 @@ def select_weighted(X: np.ndarray, y: np.ndarray, pi: np.ndarray, gamma: float, 
     """Chọn đúng k gen trên L_T: z-score theo L_T (M7), chia cột cho w_j, L1-LR đúng k. Chỉ số cột theo ma trận X đưa vào."""
     mu, sd = zscore_fit(X)
     return select_sparse_exact_k(zscore_apply(X, mu, sd) / penalty_weights(pi, gamma), y, k_list, "l1_lr", seed=seed)
+
+
+def pick_gamma(logloss: dict, margin: float = GAMMA_MARGIN) -> float:
+    """M5: xét γ tăng dần, γ lớn hơn thay γ đang giữ chỉ khi giảm log-loss OOF ít nhất `margin`."""
+    best = None
+    for gamma in sorted(logloss):
+        if best is None or logloss[best] - logloss[gamma] >= margin - 1e-12:
+            best = gamma
+    return best
+
+
+def inner_splits(y: np.ndarray, seed: int) -> list:
+    """CV phân tầng trong L_T: n_T ≤ 10 mỗi lớp 5 fold một lần, lớn hơn 5 fold lặp 3 lần. Cùng seed cho cùng các fold ở mọi γ."""
+    n_min = int(min(np.sum(y == 0), np.sum(y == 1)))
+    repeats = 1 if n_min <= C.SMALL_N_T_MAX else INNER_REPEATS_LARGE_N
+    splits = []
+    for repeat in range(repeats):
+        cv = StratifiedKFold(n_splits=min(INNER_FOLDS, n_min), shuffle=True, random_state=C.seed_for(seed, repeat))
+        splits += list(cv.split(np.zeros(len(y)), y))
+    return splits
+
+
+def gamma_path(X: np.ndarray, y: np.ndarray, pi: np.ndarray, pre_source: np.ndarray, gammas, k_list, prefilter: int, seed: int) -> dict:
+    """Chỉ số OOF cho mọi (γ, k), chỉ dùng L_T. Trong mỗi fold trong: lọc (γ = 0), chọn gen lại, fit LR-L2 với C = 1.
+
+    X là L_T trên toàn G; `pi` theo thứ tự `pre_source`. γ = 0 lọc phương sai trên phần train của fold như E1b trên L_T, γ > 0 giữ
+    bộ lọc trên nguồn. Trả về {(γ, k): {oof_logloss, oof_brier, oof_auroc, n_folds, n_repeats}}.
+    """
+    splits = inner_splits(y, seed)
+    n_folds = min(INNER_FOLDS, int(min(np.sum(y == 0), np.sum(y == 1))))
+    scores = {}
+    for f, (tr, va) in enumerate(splits):
+        fold_seed = C.seed_for(seed, 1000 + f)                    # chung cho mọi γ để ghép cặp
+        for gamma in gammas:
+            if gamma == 0:
+                pre, pi_pre = variance_prefilter(X[tr], prefilter), None
+            else:
+                pre, pi_pre = pre_source, pi
+            ks = [k for k in k_list if k <= len(pre)]
+            sel = select_weighted(X[tr][:, pre], y[tr], np.zeros(len(pre)) if pi_pre is None else pi_pre, gamma, ks, fold_seed)
+            for k in ks:
+                cols = pre[np.asarray(sel.panels[k])]
+                res = evaluate_panel(X[tr][:, cols], y[tr], X[va][:, cols], y[va], classifier="lr_l2", seed=fold_seed, small_n=True)
+                scores.setdefault((gamma, k), []).append(res.scores_test)
+    y_oof = np.concatenate([y[va] for _, va in splits])
+    path = {}
+    for key, parts in scores.items():
+        s = np.concatenate(parts)
+        logloss, brier = probability_metrics(y_oof, s, True)
+        path[key] = {"oof_logloss": logloss, "oof_brier": brier, "oof_auroc": float(roc_auc_score(y_oof, s)),
+                     "n_folds": n_folds, "n_repeats": len(splits) // n_folds}
+    return path

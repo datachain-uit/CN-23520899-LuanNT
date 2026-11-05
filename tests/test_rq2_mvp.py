@@ -130,9 +130,10 @@ def test_gamma_positive_selects_inside_source_prefilter(data_root):
 
 def test_main_writes_outputs_and_resumes(data_root):
     mvp = _load("run_rq2_mvp")
-    argv = ["--datasets", COHORT, "--k", *map(str, K), "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--save-scores"]
+    argv = ["--datasets", COHORT, "--k", *map(str, K), "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--save-scores",
+            "--gamma-rule", "fixed", "--out", "RQ2_fixed"]
     mvp.main(argv)
-    out = data_root / "results" / "survey_v2" / "RQ2_mvp" / COHORT
+    out = data_root / "results" / "survey_v2" / "RQ2_fixed" / COHORT
     per_run = pd.read_csv(out / "rq2_mvp_per_run.csv", dtype={"n_t": str})
     expected = ["cohort", "split", "seed", "subset", "n_t", "k", "method", "gamma", "gamma_rule", "auroc", "bacc", "mcc", "logloss", "brier",
                 "C", "threshold", "n_selected", "exact_k", "n_filled", "n_ihc_in_panel", "select_time_s"]
@@ -150,3 +151,108 @@ def test_main_writes_outputs_and_resumes(data_root):
     assert cfg["experiment"] == "RQ2_mvp" and cfg["source_pi_sha256"] and cfg["fewshot_splits_sha256"] and cfg["gamma_rule"] == "fixed"
     mvp.main(argv)                                            # chạy lại: resume, không thêm dòng
     assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
+
+
+# --- Bước 5: chọn γ theo M5, lồng trong L_T ---------------------------------------------------------------------------
+def test_pick_gamma_prefers_smallest_unless_margin_reached():
+    from survey_v2.mvp import pick_gamma
+
+    assert pick_gamma({0.0: 0.70, 0.5: 0.695, 1.0: 0.692}) == 0.0      # giảm < 0,01 so với γ đang giữ: không đổi
+    assert pick_gamma({0.0: 0.70, 0.5: 0.69}) == 0.5                   # giảm đúng 0,01: γ lớn hơn thắng
+    assert pick_gamma({0.0: 0.70, 0.5: 0.60, 1.0: 0.595, 2.0: 0.50}) == 2.0
+    assert pick_gamma({2.0: 0.50, 0.0: 0.70}) == 2.0                   # không phụ thuộc thứ tự khoá
+
+
+@pytest.mark.parametrize("n_per_class, n_folds", [(5, 5), (10, 5), (20, 15), (40, 15)])
+def test_inner_splits_follow_m5(n_per_class, n_folds):
+    """n_T ≤ 10: 5 fold một lần; n_T ≥ 20: 5 fold lặp 3 lần. Mỗi lần lặp phủ mọi mẫu đúng một lần, có đủ hai lớp."""
+    from survey_v2.mvp import inner_splits
+
+    y = np.repeat([0, 1], n_per_class)
+    splits = inner_splits(y, seed=3)
+    assert len(splits) == n_folds
+    n_repeats = n_folds // 5
+    for r in range(n_repeats):
+        val = np.concatenate([va for _, va in splits[r * 5:(r + 1) * 5]])
+        assert sorted(val.tolist()) == list(range(len(y)))
+    assert all(len(set(y[tr])) == 2 and len(set(y[va])) == 2 for tr, va in splits)
+    assert [va.tolist() for _, va in inner_splits(y, seed=3)] == [va.tolist() for _, va in splits]
+
+
+def test_gamma_path_reselects_genes_inside_each_fold():
+    """Trên nhiễu thuần, chọn gen lại trong fold cho AUROC OOF gần 0,5; chọn một lần trên cả L_T (đối chứng) phải cao hơn hẳn."""
+    from sklearn.metrics import roc_auc_score
+    from survey_v2.classify import evaluate_panel
+    from survey_v2.mvp import gamma_path, inner_splits, select_weighted
+
+    honest, leaky = [], []
+    for s in range(6):
+        rng = np.random.default_rng(100 + s)
+        X = rng.normal(size=(20, 300))
+        y = np.repeat([0, 1], 10)
+        path = gamma_path(X, y, np.zeros(300), np.arange(300), [0.0], [5], prefilter=300, seed=s)
+        honest.append(path[(0.0, 5)]["oof_auroc"])
+        panel = select_weighted(X, y, np.zeros(300), 0.0, [5], seed=s).panels[5]
+        oof = np.zeros(20)
+        for tr, va in inner_splits(y, seed=s):
+            oof[va] = evaluate_panel(X[tr][:, panel], y[tr], X[va][:, panel], y[va], seed=s, small_n=True).scores_test
+        leaky.append(roc_auc_score(y, oof))
+    assert np.mean(honest) < 0.70
+    assert np.mean(leaky) > np.mean(honest) + 0.20
+
+
+def test_gamma0_prefilters_on_inner_train_only(monkeypatch):
+    """γ = 0 lọc trên phần train của từng fold trong (như E1b trên L_T); γ > 0 giữ bộ lọc trên nguồn."""
+    from survey_v2 import mvp as M
+
+    seen = []
+    real = M.variance_prefilter
+    monkeypatch.setattr(M, "variance_prefilter", lambda X, p: (seen.append(X.shape[0]), real(X, p))[1])
+    rng = np.random.default_rng(1)
+    X, y = rng.normal(size=(20, 80)), np.repeat([0, 1], 10)
+    M.gamma_path(X, y, np.zeros(30), np.arange(30), [1.0], [2], prefilter=30, seed=0)
+    assert seen == []
+    M.gamma_path(X, y, np.zeros(30), np.arange(30), [0.0], [2], prefilter=30, seed=0)
+    assert seen == [16] * 5
+
+
+def test_e_gamma_choice_ignores_test_labels(data_root):
+    """Test (e): xáo nhãn test_T không đổi đường γ; chỉ số test thì đổi, chứng tỏ phép xáo có tác dụng."""
+    mvp = _load("run_rq2_mvp")
+    ds, ctx, cid, pi, _, runs = _setup(data_root)
+    split, seed, subset, n_t, tr, te = runs[0]
+    call = lambda: mvp.run_job(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, K, [0.0, 1.0], set(), set(), PREFILTER, False, "m5_cv")
+    rows, _, _, path = call()
+    index = {s: i for i, s in enumerate(ds.sample_ids)}
+    te_idx = np.array([index[s] for s in te])
+    ctx.yt = ctx.yt.copy()
+    ctx.yt[te_idx] = 1 - ctx.yt[te_idx]
+    rows2, _, _, path2 = call()
+    assert path == path2 and path
+    assert [r["auroc"] for r in rows] != [r["auroc"] for r in rows2]
+
+
+def test_main_gamma_cv_outputs_and_resumes(data_root):
+    mvp = _load("run_rq2_mvp")
+    base = ["--datasets", COHORT, "--k", *map(str, K), "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--out", "RQ2_cv"]
+    mvp.main([*base, "--gamma-rule", "fixed"])                     # fixed trước, m5_cv sau: không được nhân đôi dòng fixed
+    mvp.main(base)
+    out = data_root / "results" / "survey_v2" / "RQ2_cv" / COHORT
+    per_run = pd.read_csv(out / "rq2_mvp_per_run.csv", dtype={"n_t": str})
+    fixed, cv = per_run[per_run.gamma_rule == "fixed"], per_run[per_run.gamma_rule == "m5_cv"]
+    assert len(fixed) == 20 * len(K) * 2 and len(cv) == 20 * len(K)
+    assert fixed.groupby(["split", "subset", "n_t", "gamma", "k"]).size().max() == 1
+    assert cv.groupby(["split", "subset", "n_t", "k"]).size().max() == 1
+    path = pd.read_csv(out / "rq2_mvp_gamma_path.csv", dtype={"n_t": str})
+    assert list(path.columns) == ["cohort", "split", "seed", "subset", "n_t", "k", "gamma", "oof_logloss", "oof_brier", "oof_auroc",
+                                  "n_folds", "n_repeats", "selected"]
+    assert len(path) == 20 * len(K) * 2 and path.groupby(["split", "subset", "n_t", "k"]).selected.sum().eq(1).all()
+    picked = path[path.selected].merge(cv, on=["split", "subset", "n_t", "k"], suffixes=("_path", ""))
+    assert (picked.gamma_path == picked.gamma).all() and len(picked) == len(cv)
+    same = cv.merge(fixed, on=["split", "subset", "n_t", "k", "gamma"], suffixes=("", "_fixed"))
+    assert len(same) == len(cv) and (same.auroc == same.auroc_fixed).all()   # dòng m5_cv là chỉ số của đúng γ đã chọn
+    assert (same.select_time_s > same.select_time_s_fixed).all()             # có tính cả thời gian CV chọn γ
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["gamma_rule"] == "m5_cv"
+    mvp.main(base)                                                 # chạy lại: resume, không thêm dòng
+    assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
+    assert len(pd.read_csv(out / "rq2_mvp_gamma_path.csv")) == len(path)
