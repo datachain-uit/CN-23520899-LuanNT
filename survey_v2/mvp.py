@@ -7,9 +7,11 @@ nên sẽ triệt tiêu trọng số.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 
 from . import config as C
 from .classify import evaluate_panel, probability_metrics
@@ -22,6 +24,8 @@ SOURCE_SEED_TAG = 8            # seed_for(cid, 0, 0, 8), Review 03/11 Bảng 8 b
 GAMMA_MARGIN = 0.01            # M5: γ lớn hơn chỉ thắng khi giảm log-loss OOF ≥ 0,01
 INNER_FOLDS = 5
 INNER_REPEATS_LARGE_N = 3      # n_T ≥ 20 mỗi lớp: CV 5 fold lặp 3 lần
+EARLY_TARGET_FRACTION = 0.30   # thử nghiệm sớm: 70 % nguồn giả / 30 % đích giả theo bệnh nhân (Review 03/11 Bảng 8 bước 8)
+EARLY_SEED = 42
 
 
 def penalty_weights(pi: np.ndarray, gamma: float, eps: float = PI_EPSILON) -> np.ndarray:
@@ -40,6 +44,20 @@ def select_weighted(X: np.ndarray, y: np.ndarray, pi: np.ndarray, gamma: float, 
     """Chọn đúng k gen trên L_T: z-score theo L_T (M7), chia cột cho w_j, L1-LR đúng k. Chỉ số cột theo ma trận X đưa vào."""
     mu, sd = zscore_fit(X)
     return select_sparse_exact_k(zscore_apply(X, mu, sd) / penalty_weights(pi, gamma), y, k_list, "l1_lr", seed=seed)
+
+
+def early_split(ds, target_fraction: float = EARLY_TARGET_FRACTION, seed: int = EARLY_SEED) -> tuple:
+    """Chia một bộ thành (nguồn giả, đích giả) theo bệnh nhân, phân tầng theo nhãn. Thứ tự mẫu và gen của bộ gốc được giữ."""
+    patients, first = np.unique(ds.groups, return_index=True)
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=target_fraction, random_state=seed)
+    _, target_idx = next(sss.split(np.zeros(len(patients)), ds.y[first]))
+    is_target = np.isin(ds.groups, patients[target_idx])
+
+    def part(mask, suffix):
+        return replace(ds, name=f"{ds.name}_{suffix}", X=np.ascontiguousarray(ds.X[mask]), y=ds.y[mask], groups=ds.groups[mask],
+                       sample_ids=ds.sample_ids[mask], notes={**ds.notes, "early_split": suffix, "early_seed": seed})
+
+    return part(~is_target, "early_source"), part(is_target, "early_target")
 
 
 def pick_gamma(logloss: dict, margin: float = GAMMA_MARGIN) -> float:

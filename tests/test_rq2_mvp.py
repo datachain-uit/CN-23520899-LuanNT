@@ -256,3 +256,143 @@ def test_main_gamma_cv_outputs_and_resumes(data_root):
     mvp.main(base)                                                 # chạy lại: resume, không thêm dòng
     assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
     assert len(pd.read_csv(out / "rq2_mvp_gamma_path.csv")) == len(path)
+
+
+# --- Bước 7: test (b), (c), (d) ---------------------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def synthetic_all(tmp_path_factory):
+    """survey_v2.synthetic.make_all: nguồn và đích có chung gen tín hiệu; trả về (gốc, tên gen tín hiệu)."""
+    from survey_v2 import config as C, synthetic
+
+    root = tmp_path_factory.mktemp("kltn_mvp_all")
+    paths = synthetic.make_all(root, n=160, p=400, effect=0.9, n_target=90)
+    return root, set(json.loads((paths[C.SOURCE_DATASET] / "perm_config.json").read_text(encoding="utf-8"))["informative_genes"])
+
+
+def _run_inputs(root, k_list):
+    from survey_v2 import config as C
+    from survey_v2.data import load_dataset
+    from survey_v2.fewshot import build_fewshot_manifest, fewshot_runs
+    from survey_v2.mvp import source_stability
+    from survey_v2.transfer import TransferContext
+
+    source, ds = load_dataset(root, C.SOURCE_DATASET, gene_space=None), load_dataset(root, COHORT)
+    cid = C.cohort_id(COHORT)
+    ctx = TransferContext(source, ds, k_list, selector="l1_lr", prefilter=PREFILTER, seed=C.seed_for(cid, 0, 0, 7))
+    pi, _ = source_stability(ctx, cid)
+    runs = [r for r in fewshot_runs(build_fewshot_manifest(COHORT, ds.sample_ids, ds.groups, ds.y)) if r[3] == "5"]
+    return ds, ctx, cid, pi, runs
+
+
+def test_b_source_weights_recover_more_signal_genes_at_small_n(synthetic_all, data_root):
+    """Test (b): n_T = 5, nguồn có gen tín hiệu trùng đích: γ = 1 chọn trung bình nhiều gen tín hiệu hơn γ = 0."""
+    mvp = _load("run_rq2_mvp")
+    root, signal = synthetic_all
+    ds, ctx, cid, pi, runs = _run_inputs(root, [5])
+    assert signal & set(ctx.genes[ctx.pre].tolist())
+    hits = {0.0: [], 1.0: []}
+    for split, seed, subset, n_t, tr, te in runs:
+        _, genes, _ = mvp.run_one(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, [5], [0.0, 1.0], set(), PREFILTER, False)
+        for gamma in hits:
+            hits[gamma].append(sum(g["gene"] in signal for g in genes if g["gamma"] == gamma))
+    assert np.mean(hits[1.0]) > np.mean(hits[0.0])
+
+
+def test_c_saturation_fills_with_ftest_when_k_exceeds_l1_capacity(synthetic_all, data_root):
+    """Test (c): 2·n_T = k = 10: L1 trên 10 mẫu không đủ 10 hệ số, panel vẫn đúng k gen và n_filled được ghi."""
+    mvp = _load("run_rq2_mvp")
+    root, _ = synthetic_all
+    ds, ctx, cid, pi, runs = _run_inputs(root, [10])
+    rows, genes = [], []
+    for split, seed, subset, n_t, tr, te in runs[:4]:
+        r, g, _ = mvp.run_one(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, [10], [0.0, 1.0], set(), PREFILTER, False)
+        rows += r
+        genes += g
+    assert all(r["n_selected"] == 10 for r in rows)
+    assert any(r["n_filled"] > 0 for r in rows)
+    assert all(not r["exact_k"] for r in rows if r["n_filled"] > 0)     # chiều ngược không đúng: M6 cắt còn k gen thì n_filled = 0
+    panels = pd.DataFrame(genes).groupby(["split", "subset", "gamma"]).gene.agg(["size", "nunique"])
+    assert (panels["size"] == 10).all() and (panels["nunique"] == 10).all()
+
+
+@pytest.mark.slow
+def test_d_two_hash_seeds_give_identical_outputs(data_root):
+    """Test (d): hai PYTHONHASHSEED cho tệp trùng từng byte. Riêng rq2_mvp_per_run.csv bỏ cột thời gian select_time_s."""
+    import os
+    import subprocess
+
+    outs = []
+    for hash_seed in ("0", "1"):
+        name = f"RQ2_hash{hash_seed}"
+        env = {**os.environ, "PYTHONHASHSEED": hash_seed, "KLTN_DATA_ROOT": str(data_root), "KLTN_ALLOW_UNPUSHED": "1",
+               "KLTN_ALLOW_UNTRACKED": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"}
+        subprocess.run([sys.executable, str(REPO / "scripts" / "run_rq2_mvp.py"), "--datasets", COHORT, "--k", "2", "5", "--gamma", "0", "1",
+                        "--n-t", "5", "--prefilter", str(PREFILTER), "--save-scores", "--out", name], check=True, cwd=REPO, env=env,
+                       capture_output=True)
+        outs.append(data_root / "results" / "survey_v2" / name / COHORT)
+    for fname in ("rq2_mvp_selected_genes.csv", "rq2_mvp_gamma_path.csv", "rq2_mvp_scores.csv", "rq2_source_pi.csv"):
+        assert (outs[0] / fname).read_bytes() == (outs[1] / fname).read_bytes(), fname
+    a, b = (pd.read_csv(o / "rq2_mvp_per_run.csv", dtype=str).drop(columns="select_time_s") for o in outs)
+    pd.testing.assert_frame_equal(a, b)
+
+
+# --- Bước 8: thử nghiệm sớm trên TCGA ---------------------------------------------------------------------------------
+def test_early_split_keeps_patients_apart_and_stratifies(data_root):
+    from survey_v2 import config as C
+    from survey_v2.data import load_dataset
+    from survey_v2.mvp import early_split
+
+    ds = load_dataset(data_root, C.SOURCE_DATASET, gene_space=None)
+    src, tgt = early_split(ds)
+    assert src.n + tgt.n == ds.n and abs(tgt.n / ds.n - 0.30) < 0.02
+    assert not set(src.groups) & set(tgt.groups)
+    assert abs(tgt.y.mean() - ds.y.mean()) < 0.03
+    assert src.name != ds.name and tgt.name != ds.name and src.X.shape[1] == ds.p
+    assert np.array_equal(early_split(ds)[1].sample_ids, tgt.sample_ids)
+    j = 3
+    assert tgt.X[j, 0] == ds.X[list(ds.sample_ids).index(tgt.sample_ids[j]), 0]
+
+
+def test_main_early_tcga_compares_three_arms_without_target_leak(data_root):
+    from survey_v2 import config as C
+    from survey_v2.data import load_dataset
+    from survey_v2.mvp import early_split, source_stability
+    from survey_v2.transfer import TransferContext
+
+    mvp = _load("run_rq2_mvp")
+    argv = ["--early-tcga", "--n-t", "5", "10", "--k", "2", "5", "--prefilter", str(PREFILTER), "--out", "RQ2_early"]
+    mvp.main(argv)
+    out = data_root / "results" / "survey_v2" / "RQ2_early" / "tcga_early"
+    split = pd.read_csv(out / "early_split.csv")
+    assert list(split.columns) == ["sample_id", "patient_id", "label", "role"] and set(split.role) == {"source", "target"}
+    assert not set(split[split.role == "source"].patient_id) & set(split[split.role == "target"].patient_id)
+    man = pd.read_csv(out / "fewshot_splits.csv", dtype={"n_t": str})
+    assert set(man.n_t) == {"5", "10"} and set(man.sample_id) <= set(split[split.role == "target"].sample_id)
+
+    # π chỉ từ nguồn giả: tính lại độc lập trên nguồn giả phải trùng tệp đã ghi
+    src, tgt = early_split(load_dataset(data_root, C.SOURCE_DATASET, gene_space=None))
+    cid = C.cohort_id(tgt.name)
+    ctx = TransferContext(src, tgt, [2, 5], selector="l1_lr", prefilter=PREFILTER, seed=C.seed_for(cid, 0, 0, 7))
+    assert np.array_equal(source_stability(ctx, cid)[0], pd.read_csv(out / "rq2_source_pi.csv").pi.to_numpy())
+
+    per_run = pd.read_csv(out / "rq2_mvp_per_run.csv", dtype={"n_t": str})
+    sos = pd.read_csv(out / "rq2_early_select_on_source.csv", dtype={"n_t": str})
+    assert len(sos) == 40 * 2 and set(sos.method) == {"select_on_source"} and (sos.n_selected == sos.k).all()
+    summary = pd.read_csv(out / "rq2_early_summary.csv", dtype={"n_t": str})
+    assert list(summary.columns) == ["n_t", "k", "arm", "n_runs", "auroc_mean", "auroc_sd", "bacc_mean", "bacc_sd", "logloss_mean", "logloss_sd",
+                                     "ihc_panel_rate"]
+    assert len(summary) == 2 * 2 * 3 and set(summary.arm) == {"mvp_m5", "target_only", "select_on_source"} and (summary.n_runs == 20).all()
+    assert summary.ihc_panel_rate.between(0, 1).all()
+    pick = lambda arm: summary[(summary.arm == arm) & (summary.n_t == "5") & (summary.k == 5)].iloc[0]
+    rows = per_run[(per_run.n_t == "5") & (per_run.k == 5)]
+    target = rows[(rows.gamma_rule == "fixed") & (rows.gamma == 0)]
+    assert pick("target_only").auroc_mean == pytest.approx(target.auroc.mean())
+    assert pick("target_only").auroc_sd == pytest.approx(target.auroc.std())
+    assert pick("target_only").ihc_panel_rate == pytest.approx((target.n_ihc_in_panel > 0).mean())
+    assert pick("mvp_m5").auroc_mean == pytest.approx(rows[rows.gamma_rule == "m5_cv"].auroc.mean())
+    cfg = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert cfg["experiment"] == "RQ2_mvp_early" and cfg["early_seed"] == 42 and cfg["n_source"] == int((split.role == "source").sum())
+    assert cfg["early_split_sha256"] and cfg["fewshot_splits_sha256"]
+    mvp.main(argv)                                                 # chạy lại: resume, không thêm dòng
+    assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
+    assert len(pd.read_csv(out / "rq2_early_select_on_source.csv")) == len(sos)
