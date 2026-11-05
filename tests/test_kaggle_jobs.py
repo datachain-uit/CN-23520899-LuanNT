@@ -212,3 +212,29 @@ def test_per_experiment_notebook_only_dispatches(exp):
     assert f"JOB = {exp.jobs[0]!r}" in code and "assert JOB in JOBS_IN_NOTEBOOK" in code
     assert "scripts/kaggle_jobs.py" in code and "scripts/run_" not in code and "make_survey_tables" not in code
     assert "KLTN_STRICT_N" in code and "'traceable'" not in code
+
+
+def _config_source(path: Path) -> str:
+    nb = json.loads(path.read_text(encoding="utf-8"))
+    return "".join(nb["cells"][1]["source"])
+
+
+def test_rq2_early_job_uses_script_defaults_and_needs_no_restore():
+    """Bước 8 (Review 03/11): chỉ cần dữ liệu TCGA; k, n_T lấy từ mặc định của script (M18), không ghi trong danh mục."""
+    job = kj.JOBS["rq2_early"]
+    assert job.outputs == ["RQ2_mvp_early/tcga_early"] and job.restore_from == [] and job.requires == [] and not job.exclusive
+    assert len(job.shards) == 1 and "--k" not in job.shards[0] and "--n-t" not in job.shards[0]
+    args = _load(REPO / job.shards[0][0]).parse_args(job.shards[0][1:])
+    assert args.early_tcga and args.save_scores and args.out == "RQ2_mvp_early"
+    assert args.k == [2, 4, 5, 10] and args.n_t == ["5", "10"] and args.gamma_rule == "m5_cv"
+
+
+def test_rq2_notebook_clones_rq2_branch_and_survey_notebooks_stay_on_survey_branch():
+    """Code MVP ở nhánh rq2-mvp của repo cá nhân; notebook survey phải giữ repo và nhánh cũ để tái lập số liệu đã chốt."""
+    rq2 = _config_source(REPO / "notebooks" / "kaggle" / "kaggle_rq2_early.ipynb")
+    assert "REPO_BRANCH = 'rq2-mvp'" in rq2 and "REPO_URL = 'https://github.com/datachain-uit/CN-23520899-LuanNT.git'" in rq2
+    for exp in mk.EXPERIMENTS:
+        if exp.file != "kaggle_rq2_early.ipynb":
+            other = _config_source(REPO / "notebooks" / "kaggle" / exp.file)
+            assert "REPO_BRANCH = 'survey-v2-code'" in other and "REPO_URL = 'https://github.com/datachain-uit/RNA-Seq-FS-Survey.git'" in other, exp.file
+    assert "REPO_BRANCH = 'survey-v2-code'" in _config_source(REPO / "notebooks" / "kaggle_survey_v3_runner.ipynb")

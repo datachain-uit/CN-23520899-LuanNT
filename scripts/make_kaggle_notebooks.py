@@ -40,6 +40,8 @@ class Experiment:
     intro: str          # mục đích, đầu ra, nghiệm thu (markdown)
     jobs: list          # theo thứ tự chạy
     order: str          # hướng dẫn thứ tự phiên (markdown)
+    repo_branch: str | None = None   # nhánh clone nếu khác runner (bài 2: rq2-mvp); notebook survey giữ nhánh của runner
+    repo_url: str | None = None      # repo clone nếu khác runner (bài 2: repo cá nhân); notebook survey giữ repo của runner
 
 
 EXPERIMENTS = [
@@ -136,6 +138,15 @@ EXPERIMENTS = [
         ["ablation_phaseA_geo", "ablation_phaseA_tcga", "ablation_phaseB"],
         "1. `ablation_phaseA_geo` và `ablation_phaseA_tcga` (2 phiên song song; TCGA có thể quá 12 giờ → chạy lại cùng JOB).\n"
         "2. `ablation_phaseB` — khôi phục output cả hai phiên pha A."),
+    Experiment(
+        "kaggle_rq2_early.ipynb", "Bài 2 — thử nghiệm sớm MVP trên TCGA (PC-04)",
+        "TCGA chia theo bệnh nhân 70 % nguồn giả / 30 % đích giả (phân tầng, seed 42); n_T ∈ {5, 10}, k ∈ {2, 4, 5, 10}; so MVP (γ theo M5), "
+        "target-only (γ = 0) và select-on-source → `RQ2_mvp_early/tcga_early/`, bảng `rq2_early_summary.csv`.\n"
+        "Nghiệm thu: `JOB_OK`; chỉ kiểm tra đường ống, **không kết luận H2** (nguồn giả và đích giả cùng nền tảng).",
+        ["rq2_early"],
+        "Một phiên, không cần khôi phục. Notebook clone nhánh `rq2-mvp` của repo `datachain-uit/CN-23520899-LuanNT`; push nhánh và ghim "
+        "`REPO_COMMIT` trước khi chạy.",
+        repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
 ]
 
 JOB_LINE_PREFIX = "JOB = "
@@ -182,6 +193,10 @@ def build(exp: Experiment, runner: dict, jobs) -> dict:
     cfg[i:i + 1] = [f"JOBS_IN_NOTEBOOK = [{allowed}]",
                     f"JOB = {exp.jobs[0]!r}" + "  # chọn một trong JOBS_IN_NOTEBOOK (bảng ở đầu notebook)"]
     cfg.append("assert JOB in JOBS_IN_NOTEBOOK, f'{JOB} không thuộc notebook này — dùng notebook của thí nghiệm tương ứng'")
+    for prefix, value in (("REPO_BRANCH = ", exp.repo_branch), ("REPO_URL = ", exp.repo_url)):
+        if value:
+            j = next(k for k, line in enumerate(cfg) if line.startswith(prefix))
+            cfg[j] = f"{prefix}{value!r}"
     cells[1]["source"] = _lines("\n".join(cfg))
     for c in cells:
         if c["cell_type"] == "code":

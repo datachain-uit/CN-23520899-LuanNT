@@ -31,6 +31,8 @@ tracemalloc) — `run` dừng với mã 2 nếu không đạt, nên khôi phục
 E1 pha A/B và E1b cho hai panel công bố (Girard 2016, Wilkerson 2013; survey_v2/panels/published_panels.csv) nối vào kết
 quả đã có; (4) `tables` chạy lại sau `panels` (bảng ablation IHC và CI bootstrap tái lập — scripts/make_survey_tables.py);
 (5) `status` in commit và redo_methods của từng thư mục kết quả đã khôi phục.
+
+Bài 2 (Review 03/11/2026, QĐ37): việc `rq2_early` là thử nghiệm sớm PC-04 trên TCGA; code chỉ có ở nhánh rq2-mvp.
 """
 
 from __future__ import annotations
@@ -225,6 +227,11 @@ def build_jobs() -> dict[str, Job]:
                  requires=[f"E1_feature_selection_noIHC/{d}/selected_genes.csv" for d in C.DATASETS],
                  requires_cfg=[(f"E1_feature_selection_noIHC/{d}/config.json", "redo_methods", "svm_rfe") for d in C.DATASETS],
                  restore_from=["ablation_phaseA_geo", "ablation_phaseA_tcga", "redo_svm_rfe_A"], hours="3–6"))
+    # ----------------------------------------------------------------- Bài 2 (Review 03/11, QĐ37): thử nghiệm sớm MVP
+    J.append(Job("rq2_early", "M · 08/11", "Thử nghiệm sớm PC-04: TCGA chia 70 % nguồn giả / 30 % đích giả theo bệnh nhân; MVP (γ theo M5), "
+                 "target-only, select-on-source; không kết luận H2",
+                 [["scripts/run_rq2_mvp.py", "--early-tcga", "--save-scores", "--n-jobs", "4", "--out", "RQ2_mvp_early"]],
+                 ["RQ2_mvp_early/tcga_early"], parallel=1, hours="<1"))
     return {j.name: j for j in J}
 
 

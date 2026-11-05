@@ -31,6 +31,7 @@ def data_root(tmp_path_factory):
     mp.setenv("KLTN_DATA_ROOT", str(root))
     mp.setenv("KLTN_ALLOW_UNPUSHED", "1")
     mp.setenv("KLTN_ALLOW_UNTRACKED", "1")
+    mp.setenv("KLTN_STRICT_N", "0")                                 # runner Kaggle đặt = 1; dữ liệu giả không có số mẫu thật
     for m in list(sys.modules):
         if m.startswith("scripts.") or m == "scripts" or m.startswith("survey_v2.runlog") or m.startswith("run_") or m == "provenance":
             del sys.modules[m]
