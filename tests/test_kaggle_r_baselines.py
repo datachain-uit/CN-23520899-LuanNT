@@ -1,9 +1,10 @@
-"""PD-04 (Review 03/11, QĐ37): notebook Kaggle R kiểm cài ptLasso, glmtrans và chạy ví dụ gốc.
+"""PD-04 (Review 03/11, QĐ37): notebook Kaggle tự cài R, kiểm cài ptLasso, glmtrans và chạy ví dụ gốc.
 
 Máy phát triển và CI Python không có R, nên test chỉ kiểm cấu trúc: script và notebook có đúng các bước, kết quả được lưu kể cả khi
 cài lỗi, và dấu ngoặc cân bằng. Hành vi thật chỉ được xác nhận khi notebook chạy trên Kaggle (r_baseline_check.csv, sessionInfo.txt).
 """
 
+import ast
 import json
 from pathlib import Path
 
@@ -81,24 +82,42 @@ def test_script_installs_outside_output_folder():
     assert "R_BASELINE_LIB" in text and ".libPaths(" in text and "/kaggle/" not in text
 
 
-def test_notebook_uses_r_kernel_and_only_dispatches_to_script():
+def test_notebook_runs_on_python_kernel_and_is_valid_python():
+    """Phiên Kaggle dùng kernel Python (ipykernel); notebook bản R báo NameError và SyntaxError ở `<-`, `1L`."""
     nb, cells = _cells()
-    assert nb["metadata"]["kernelspec"]["name"] == "ir" and nb["metadata"]["kernelspec"]["language"] == "R"
+    assert nb["metadata"]["kernelspec"]["name"] == "python3" and nb["metadata"]["kernelspec"]["language"] == "python"
     for src in cells:
-        _assert_balanced(src)
-        assert "install.packages" not in src and "ptLasso::" not in src and "glmtrans::" not in src      # M18: lệnh nằm trong script đã commit
+        ast.parse(src)
+        assert "<-" not in src
     assert all(c.get("outputs") == [] and c.get("execution_count") is None for c in nb["cells"] if c["cell_type"] == "code")
+
+
+def test_notebook_only_dispatches_to_r_script():
+    _, cells = _cells()
+    code = "\n".join(cells)
+    assert "scripts/r/check_r_baselines.R" in code and "Rscript" in code
+    for command in ("install.packages", "ptLasso::", "glmtrans::"):                 # M18: lệnh nằm trong script đã commit
+        assert command not in code
+
+
+def test_notebook_installs_own_r_from_conda_forge():
+    _, cells = _cells()
+    code = "\n".join(cells)
+    assert "micromamba" in code and "conda-forge" in code and "r-base" in code
+    for dep in ("r-glmnet", "r-caret"):                                             # phụ thuộc nặng lấy bản biên dịch sẵn
+        assert dep in code
 
 
 def test_notebook_pins_pushed_commit_and_repo():
     _, cells = _cells()
     code = "\n".join(cells)
     assert "https://github.com/datachain-uit/CN-23520899-LuanNT.git" in code and "'rq2-mvp'" in code
-    assert "REPO_COMMIT" in code and "stop(" in code and "--contains" in code
+    assert "REPO_COMMIT = '67bbbe1'" in code and "--contains" in code
 
 
 def test_notebook_saves_results_before_reporting_failure():
     _, cells = _cells()
     code = "\n".join(cells)
-    assert "scripts/r/check_r_baselines.R" in code and "r_baselines_results.zip" in code
-    assert code.index("r_baselines_results.zip") < code.rindex("stop(")              # lưu zip rồi mới báo lỗi
+    assert "r_baselines_results" in code and "make_archive" in code
+    assert code.index("make_archive") < code.rindex("raise ")                        # lưu zip rồi mới báo lỗi
+    assert "setup_error" in code                                                     # lỗi cài R vẫn được ghi vào zip
