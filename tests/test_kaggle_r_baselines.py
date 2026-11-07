@@ -146,4 +146,5 @@ def test_questions_notebook_only_dispatches_and_names_zip_with_commit():
     for command in ("install.packages", "ptLasso::", "glmtrans::"):
         assert command not in code
     assert all(c.get("outputs") == [] and c.get("execution_count") is None for c in nb["cells"] if c["cell_type"] == "code")
+    assert code.index("shutil.rmtree(OUT_DIR)") < code.index("OUT_DIR.mkdir")      # zip không được lẫn tệp lỗi của lần chạy trước trong cùng phiên
     assert "setup_r.log" in code and "[-40:]" in code[code.index("except Exception as exc"):code.index("Cài R:")]   # lỗi cài R phải hiện ngay trong output của phiên
