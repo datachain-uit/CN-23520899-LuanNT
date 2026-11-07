@@ -87,16 +87,31 @@ q1_glmnet_equals_package <- function() {
   support <- which(bhat[-(1:k)] != 0)
   fac <- rep(1 / alpha, ncol(x))
   fac[support] <- 1
+  # Không truyền lambda: cv.glmnet của gói fit toàn tập bằng đường lambda tự sinh; truyền sẵn đường đó là một phép tính khác,
+  # vì glmnet ghi lambda đầu tiên bằng giá trị ngoại suy. Hai số còn lại chỉ để chẩn đoán khi không đạt.
   worst <- 0
+  worst_given_lambda <- 0
+  worst_selected <- 0
   for (g in seq_len(k)) {
     ix <- groups == g
-    package_fit <- fit$fitpre[[g]]$glmnet.fit
-    own <- glmnet::glmnet(x[ix, ], y[ix], family = "binomial", offset = (1 - alpha) * preval[ix], penalty.factor = fac,
-                          lambda = package_fit$lambda, standardize = TRUE)
+    package_cv <- fit$fitpre[[g]]
+    package_fit <- package_cv$glmnet.fit
+    offset <- (1 - alpha) * preval[ix]
+    own <- glmnet::glmnet(x[ix, ], y[ix], family = "binomial", offset = offset, penalty.factor = fac, standardize = TRUE)
+    if (length(own$lambda) != length(package_fit$lambda)) {
+      stop(sprintf("nhóm %d: đường lambda dài %d, của gói dài %d", g, length(own$lambda), length(package_fit$lambda)))
+    }
     worst <- max(worst, max(abs(as.matrix(coef(own)) - as.matrix(coef(package_fit)))))
+    given <- glmnet::glmnet(x[ix, ], y[ix], family = "binomial", offset = offset, penalty.factor = fac, lambda = package_fit$lambda, standardize = TRUE)
+    worst_given_lambda <- max(worst_given_lambda, max(abs(as.matrix(coef(given)) - as.matrix(coef(package_fit)))))
+    at <- package_cv$lambda.1se
+    worst_selected <- max(worst_selected, max(abs(as.matrix(coef(given, s = at)) - as.matrix(coef(package_fit, s = at)))))
   }
-  if (!(worst < EQUALITY_TOLERANCE)) stop(sprintf("sai khác lớn nhất %.3e, vượt ngưỡng %.0e", worst, EQUALITY_TOLERANCE))
-  sprintf("sai khác lớn nhất của hệ số trên đường lambda: %.3e (ngưỡng %.0e); %d gen support", worst, EQUALITY_TOLERANCE, length(support))
+  detail <- sprintf(paste0("sai khác lớn nhất trên đường lambda tự sinh: %.3e (ngưỡng %.0e); khi truyền sẵn lambda: %.3e, riêng tại lambda.1se: %.3e; ",
+                           "%d gen support; fit.preval trong [%.3f, %.3f]"),
+                    worst, EQUALITY_TOLERANCE, worst_given_lambda, worst_selected, length(support), min(preval), max(preval))
+  if (!(worst < EQUALITY_TOLERANCE)) stop(detail)
+  detail
 }
 
 # Câu 2: một lần glmtrans, phát hiện nguồn bật, tham số khác để mặc định của gói.
