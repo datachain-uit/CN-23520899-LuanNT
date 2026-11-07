@@ -121,3 +121,28 @@ def test_notebook_saves_results_before_reporting_failure():
     assert "r_baselines_results" in code and "make_archive" in code
     assert code.index("make_archive") < code.rindex("raise ")                        # lưu zip rồi mới báo lỗi
     assert "setup_error" in code                                                     # lỗi cài R vẫn được ghi vào zip
+
+
+# --- Câu 1, 2 Mục 6 Review 07/11; không có R trên máy phát triển nên chỉ kiểm cấu trúc -----------------------------------------
+QUESTIONS = REPO / "scripts" / "r" / "check_r_questions.R"
+QUESTIONS_NB = REPO / "notebooks" / "kaggle_r" / "kaggle_rq2_r_questions.ipynb"
+
+
+def test_questions_script_is_balanced_and_writes_outputs_before_quit():
+    text = QUESTIONS.read_text(encoding="utf-8")
+    _assert_balanced(text)
+    assert text.index("r_questions.csv\"), row.names") < text.index("quit(") and text.index("sessionInfo.txt\"))") < text.index("quit(")
+    assert "tryCatch(" in _strip_r(text) and "/kaggle/" not in text
+
+
+def test_questions_notebook_only_dispatches_and_names_zip_with_commit():
+    nb = json.loads(QUESTIONS_NB.read_text(encoding="utf-8"))
+    cells = ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+    for src in cells:
+        ast.parse(src)
+    code = "\n".join(cells)
+    assert "scripts/r/check_r_questions.R" in code and "check_r_baselines" not in code
+    assert "r_questions_{commit_hash[:7]}_results" in code and "--contains" in code and "'r-base=4.5.3'" in code
+    for command in ("install.packages", "ptLasso::", "glmtrans::"):
+        assert command not in code
+    assert all(c.get("outputs") == [] and c.get("execution_count") is None for c in nb["cells"] if c["cell_type"] == "code")
