@@ -142,7 +142,8 @@ def test_questions_notebook_only_dispatches_and_names_zip_with_commit():
         ast.parse(src)
     code = "\n".join(cells)
     assert "scripts/r/check_r_questions.R" in code and "check_r_baselines" not in code
-    assert "r_questions_{commit_hash[:7]}_results" in code and "--contains" in code and "'r-base=4.5.3'" in code
+    assert "r_questions_{commit_hash[:7]}_results" in code and "--contains" in code and "'r-base==4.5.3'" in code and "'r-glmnet==5.0'" in code
     for command in ("install.packages", "ptLasso::", "glmtrans::"):
         assert command not in code
     assert all(c.get("outputs") == [] and c.get("execution_count") is None for c in nb["cells"] if c["cell_type"] == "code")
+    assert "setup_r.log" in code and "[-40:]" in code[code.index("except Exception as exc"):code.index("Cài R:")]   # lỗi cài R phải hiện ngay trong output của phiên
