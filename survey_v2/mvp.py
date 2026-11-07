@@ -86,6 +86,11 @@ def pick_gamma(logloss: dict, margin: float = GAMMA_MARGIN) -> float:
     return best
 
 
+def pick_gamma_positive(logloss: dict, margin: float = GAMMA_MARGIN) -> float | None:
+    """QĐ49: M5 chỉ trên γ > 0 (quy tắc m5_pos). γ = 0 là đối chứng target-only nên không phải ứng viên. Không có γ > 0 thì trả None."""
+    return pick_gamma({g: v for g, v in logloss.items() if g > 0}, margin)
+
+
 def inner_splits(y: np.ndarray, seed: int) -> list:
     """CV phân tầng trong L_T: n_T ≤ 10 mỗi lớp 5 fold một lần, lớn hơn 5 fold lặp 3 lần. Cùng seed cho cùng các fold ở mọi γ."""
     n_min = int(min(np.sum(y == 0), np.sum(y == 1)))

@@ -51,7 +51,7 @@ python scripts/kaggle_jobs.py status        # việc nào đã có đầu ra tro
 
 1. Ô cấu hình: `JOB = '<tên việc>'`, `RESTORE_INPUTS = [...]` (nếu `plan` ghi cần khôi phục), `REPO_COMMIT = '<hash>'`.
 2. Add Input: `experiment-data-v3` + output của các việc cần khôi phục.
-3. Save Version → Save & Run All. Kết quả: `/kaggle/working/<JOB>_results.zip` (toàn bộ `results/` gồm phần đã khôi phục + phần mới,
+3. Save Version → Save & Run All. Kết quả: `/kaggle/working/<JOB>_<commit7>_results.zip` (toàn bộ `results/` gồm phần đã khôi phục + phần mới,
    `logs/`, `run_info_<JOB>.json`).
 4. Lưu output thành Dataset để dùng lại: trang phiên → Output → **New Dataset** (đặt tên `kltn-<job>`), hoặc Add Input → Notebook
    Output Files của đúng version. Trong `RESTORE_INPUTS` ghi thư mục Input đó, vd. `[Path('/kaggle/input/kltn-e1-phasea-geo')]`.

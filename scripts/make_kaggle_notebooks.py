@@ -147,6 +147,15 @@ EXPERIMENTS = [
         "Một phiên, không cần khôi phục. Notebook clone nhánh `rq2-mvp` của repo `datachain-uit/CN-23520899-LuanNT`; push nhánh và ghim "
         "`REPO_COMMIT` trước khi chạy.",
         repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
+    Experiment(
+        "kaggle_rq2_mvp.ipynb", "Bài 2 — RQ2 trên 4 cohort GEO (QĐ49–QĐ51)",
+        "MVP (m5_pos là cấu hình chính; m5_cv, từng γ cố định; γ = 0 trên không gian gen của đích và của nguồn), select-on-source, pooled, IHC-2, IHC-4 trên đúng "
+        "các tập con few-shot của E1b → `RQ2_mvp/<cohort>/`, có điểm từng mẫu.\n"
+        "Nghiệm thu: `JOB_OK`; config.json traceable; `RQ2_mvp/rq2_equality_report.csv` toàn `ok`. Cổng không đạt: dừng và báo cáo, không sửa tay.",
+        ["rq2_mvp"],
+        "**Chỉ chạy sau khi GVHD xác nhận KBTN v2.4.** Một phiên, khôi phục đúng thứ tự `e7` rồi `panels` (E1b mới nhất nằm trong `panels`). Push nhánh và ghim "
+        "`REPO_COMMIT` trước khi chạy.",
+        repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
 ]
 
 JOB_LINE_PREFIX = "JOB = "
@@ -184,7 +193,7 @@ def build(exp: Experiment, runner: dict, jobs) -> dict:
             "2. Ô cấu hình: `JOB`, `RESTORE_INPUTS` (**đúng thứ tự cột Khôi phục** — zip sau ghi đè zip trước, output mới nhất cuối), "
             "`REPO_COMMIT` (giữ một commit cho mọi phiên của một đợt). `kaggle_jobs.py run` dừng (mã 2) nếu config.json của đầu vào "
             "không đúng bản (`requires_cfg`, v3.1.7).\n"
-            "3. Save Version → Save & Run All. Output: `/kaggle/working/<JOB>_results.zip` → lưu thành Dataset `kltn-<job>`.\n"
+            "3. Save Version → Save & Run All. Output: `/kaggle/working/<JOB>_<commit7>_results.zip` → lưu thành Dataset `kltn-<job>`.\n"
             "4. Mã 124 (quá `MAX_HOURS`): phiên mới cùng JOB, khôi phục zip vừa lưu — script tự tiếp tục từ checkpoint.\n")
     cells[0]["source"] = _lines(head)
     cfg = _src(cells[1]).split("\n")

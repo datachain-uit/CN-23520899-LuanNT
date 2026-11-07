@@ -33,6 +33,7 @@ quả đã có; (4) `tables` chạy lại sau `panels` (bảng ablation IHC và 
 (5) `status` in commit và redo_methods của từng thư mục kết quả đã khôi phục.
 
 Bài 2 (Review 03/11/2026, QĐ37): việc `rq2_early` là thử nghiệm sớm PC-04 trên TCGA; code chỉ có ở nhánh rq2-mvp.
+Review 07/11/2026: việc `rq2_mvp` chạy RQ2 trên 4 cohort; `gates` là các lệnh chạy trong bước verify, thoát khác 0 thì việc không đạt (QĐ51: cổng bằng nhau).
 """
 
 from __future__ import annotations
@@ -86,6 +87,7 @@ class Job:
     requires: list = field(default_factory=list)    # tệp (tương đối results/survey_v2) phải có trước khi chạy
     restore_from: list = field(default_factory=list)  # output các việc phải gắn làm Input, THEO THỨ TỰ GIẢI NÉN (mới nhất cuối)
     requires_cfg: list = field(default_factory=list)  # (config.json tương đối, khoá, giá trị): bằng nhau, hoặc thuộc danh sách
+    gates: list = field(default_factory=list)       # lệnh chạy ở bước verify (mỗi phần tử: list đối số sau "python"); thoát khác 0 là không đạt
     parallel: int = 4
     exclusive: bool = False
     hours: str = ""
@@ -232,6 +234,13 @@ def build_jobs() -> dict[str, Job]:
                  "target-only, select-on-source; không kết luận H2",
                  [["scripts/run_rq2_mvp.py", "--early-tcga", "--save-scores", "--n-jobs", "4", "--out", "RQ2_mvp_early"]],
                  ["RQ2_mvp_early/tcga_early"], parallel=1, hours="<1"))
+    J.append(Job("rq2_mvp", "M · 13/11", "RQ2 trên 4 cohort GEO (QĐ49–QĐ51): MVP (m5_pos, m5_cv, γ cố định, γ = 0 hai không gian gen), select-on-source, pooled, IHC-2, IHC-4; "
+                 "có điểm từng mẫu; cổng bằng nhau với E1b, E7 ở bước verify",
+                 [["scripts/run_rq2_mvp.py", "--datasets", *GEO, "--k", "2", "3", "4", "5", "10", "--gamma", "0", "0.5", "1", "2", "--save-scores", "--n-jobs", "4", "--out", "RQ2_mvp"]],
+                 [f"RQ2_mvp/{d}" for d in GEO],
+                 requires=[f"E1b/{d}/e1b_per_run.csv" for d in GEO] + [f"E7/{d}/e7_per_run.csv" for d in GEO],
+                 requires_cfg=[(f"E1b/{d}/config.json", "methods_in_results", m) for d in GEO for m in ("l1_lr", "ihc_2", "ihc_4")],
+                 restore_from=["e7", "panels"], gates=[["scripts/check_rq2_equality.py"]], parallel=1, hours="2–3"))
     return {j.name: j for j in J}
 
 
@@ -358,6 +367,10 @@ def verify(job: Job, commit: str | None) -> list[str]:
             problems.append(f"{rel}: commit_hash {cfg.get('commit_hash')} khác HEAD {commit}")
         if "calibration_ok" in cfg and cfg.get("calibration_ok") is False:
             problems.append(f"{rel}: calibration_ok = false (QĐ18: không được trích)")
+    for gate in job.gates:
+        code = subprocess.run(command(gate), cwd=REPO).returncode
+        if code != 0:
+            problems.append(f"cổng {gate[0]}: mã {code}")
     return problems
 
 
@@ -478,6 +491,8 @@ def cmd_show(job: Job):
     for s in job.finalize:
         print("  [finalize] python", " ".join(render(s)) if os.environ.get("KLTN_DATA_ROOT") else " ".join(s))
     print("đầu ra kiểm tra:", ", ".join(job.outputs) or "—")
+    for g in job.gates:
+        print("  [cổng ở bước verify] python", " ".join(g))
 
 
 def cmd_run(job: Job, parallel: int | None, log_dir: Path, max_hours: float | None = None) -> int:

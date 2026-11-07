@@ -226,15 +226,48 @@ def test_rq2_early_job_uses_script_defaults_and_needs_no_restore():
     assert len(job.shards) == 1 and "--k" not in job.shards[0] and "--n-t" not in job.shards[0]
     args = _load(REPO / job.shards[0][0]).parse_args(job.shards[0][1:])
     assert args.early_tcga and args.save_scores and args.out == "RQ2_mvp_early"
-    assert args.k == [2, 4, 5, 10] and args.n_t == ["5", "10"] and args.gamma_rule == "m5_cv"
+    assert args.k == [2, 4, 5, 10] and args.n_t == ["5", "10"] and args.gamma_rule == "cv" and args.arms == ["mvp"]
 
 
 def test_rq2_notebook_clones_rq2_branch_and_survey_notebooks_stay_on_survey_branch():
     """Code MVP ở nhánh rq2-mvp của repo cá nhân; notebook survey phải giữ repo và nhánh cũ để tái lập số liệu đã chốt."""
-    rq2 = _config_source(REPO / "notebooks" / "kaggle" / "kaggle_rq2_early.ipynb")
-    assert "REPO_BRANCH = 'rq2-mvp'" in rq2 and "REPO_URL = 'https://github.com/datachain-uit/CN-23520899-LuanNT.git'" in rq2
+    for name in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb"):
+        rq2 = _config_source(REPO / "notebooks" / "kaggle" / name)
+        assert "REPO_BRANCH = 'rq2-mvp'" in rq2 and "REPO_URL = 'https://github.com/datachain-uit/CN-23520899-LuanNT.git'" in rq2
     for exp in mk.EXPERIMENTS:
-        if exp.file != "kaggle_rq2_early.ipynb":
+        if exp.file not in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb"):
             other = _config_source(REPO / "notebooks" / "kaggle" / exp.file)
             assert "REPO_BRANCH = 'survey-v2-code'" in other and "REPO_URL = 'https://github.com/datachain-uit/RNA-Seq-FS-Survey.git'" in other, exp.file
     assert "REPO_BRANCH = 'survey-v2-code'" in _config_source(REPO / "notebooks" / "kaggle_survey_v3_runner.ipynb")
+
+
+def test_rq2_mvp_job_runs_all_arms_and_gates_on_equality():
+    """Review 07/11 Bảng 7 bước 5, 6: đủ 4 cohort, 5 mức k, 4 γ, có điểm từng mẫu; khôi phục E7 rồi panels (E1b mới nhất); cổng nằm ở bước verify."""
+    job = kj.JOBS["rq2_mvp"]
+    assert job.outputs == [f"RQ2_mvp/{d}" for d in kj.GEO] and job.restore_from == ["e7", "panels"]
+    assert set(job.requires) == {f"E1b/{d}/e1b_per_run.csv" for d in kj.GEO} | {f"E7/{d}/e7_per_run.csv" for d in kj.GEO}
+    assert len(job.shards) == 1
+    args = _load(REPO / job.shards[0][0]).parse_args(job.shards[0][1:])
+    assert args.datasets == list(kj.GEO) and args.k == [2, 3, 4, 5, 10] and args.gamma == [0.0, 0.5, 1.0, 2.0]
+    assert args.save_scores and args.out == "RQ2_mvp" and args.gamma_rule == "cv" and args.arms == ["mvp", "d3", "ihc"] and args.n_t is None
+    assert [g[0] for g in job.gates] == ["scripts/check_rq2_equality.py"]
+
+
+@pytest.mark.parametrize("code, passes", [(0, True), (3, False)])
+def test_verify_reports_failing_gate(tmp_path, monkeypatch, code, passes):
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    job = kj.Job("x", "b", "w", shards=[], outputs=[], gates=[["-c", f"import sys; sys.exit({code})"]])
+    problems = kj.verify(job, None)
+    assert (problems == []) is passes
+    assert passes or "mã 3" in problems[0]
+
+
+@pytest.mark.parametrize("path", ["notebooks/kaggle_survey_v3_runner.ipynb", "notebooks/kaggle/kaggle_rq2_mvp.ipynb"])
+def test_runner_archive_name_has_commit_and_still_matches_restore_glob(path):
+    """Y58: tên zip kèm commit để tải lại không ghi đè; ô khôi phục tìm theo *_results.zip nên vẫn nhận tên mới."""
+    import fnmatch
+
+    nb = json.loads((REPO / path).read_text(encoding="utf-8"))
+    code = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    assert "f'{JOB}_{commit_hash[:7]}_results.zip'" in code
+    assert "rglob('*_results.zip')" in code and fnmatch.fnmatch("rq2_mvp_abc1234_results.zip", "*_results.zip")

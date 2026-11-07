@@ -107,6 +107,8 @@ def test_a_gamma0_matches_e1b_target_only(data_root):
         e_rows, e_genes, _ = e1b.run_one(ds, cid, split, seed, subset, n_t, tr, te, ["l1_lr"], K,
                                          SimpleNamespace(prefilter=PREFILTER, random_draws=0))
         m_rows, m_genes, _ = mvp.run_one(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, K, [0.0], set(), PREFILTER, False)
+        m_rows = [r for r in m_rows if r["prefilter_space"] == "target"]
+        m_genes = [g for g in m_genes if g["prefilter_space"] == "target"]
         assert len(e_rows) == len(m_rows) == len(K)
         for e, m in zip(e_rows, m_rows):
             assert e["k"] == m["k"] and m["gamma"] == 0.0 and m["method"] == "mvp"
@@ -132,22 +134,23 @@ def test_gamma_positive_selects_inside_source_prefilter(data_root):
 def test_main_writes_outputs_and_resumes(data_root):
     mvp = _load("run_rq2_mvp")
     argv = ["--datasets", COHORT, "--k", *map(str, K), "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--save-scores",
-            "--gamma-rule", "fixed", "--out", "RQ2_fixed"]
+            "--gamma-rule", "fixed", "--arms", "mvp", "--out", "RQ2_fixed"]
     mvp.main(argv)
     out = data_root / "results" / "survey_v2" / "RQ2_fixed" / COHORT
     per_run = pd.read_csv(out / "rq2_mvp_per_run.csv", dtype={"n_t": str})
-    expected = ["cohort", "split", "seed", "subset", "n_t", "k", "method", "gamma", "gamma_rule", "auroc", "bacc", "mcc", "logloss", "brier",
+    expected = ["cohort", "split", "seed", "subset", "n_t", "k", "method", "gamma", "gamma_rule", "prefilter_space", "auroc", "bacc", "mcc", "logloss", "brier",
                 "C", "threshold", "n_selected", "exact_k", "n_filled", "n_ihc_in_panel", "select_time_s"]
     assert list(per_run.columns) == expected
-    assert len(per_run) == 20 * len(K) * 2 and per_run.groupby(["split", "subset", "n_t", "gamma", "k"]).size().max() == 1
+    assert len(per_run) == 20 * len(K) * 3                         # γ = 0 trên đích, γ = 0 trên nguồn, γ = 1
+    assert per_run.groupby(["split", "subset", "n_t", "gamma", "prefilter_space", "k"]).size().max() == 1
     assert set(per_run.gamma_rule) == {"fixed"} and (per_run.n_selected == per_run.k).all()
     genes = pd.read_csv(out / "rq2_mvp_selected_genes.csv", dtype={"n_t": str})
-    assert list(genes.columns) == ["cohort", "split", "seed", "subset", "n_t", "k", "gamma", "rank", "gene", "pi_source"]
+    assert list(genes.columns) == ["cohort", "split", "seed", "subset", "n_t", "k", "method", "gamma", "prefilter_space", "rank", "gene", "pi_source"]
     assert len(genes) == per_run.k.sum()
     pi = pd.read_csv(out / "rq2_source_pi.csv")
     assert list(pi.columns) == ["gene", "pi", "C_q"] and len(pi) == PREFILTER and pi.pi.between(0, 1).all()
     scores = pd.read_csv(out / "rq2_mvp_scores.csv", dtype={"n_t": str})
-    assert {"sample_id", "y_true", "score", "gamma", "k"} <= set(scores.columns)
+    assert {"sample_id", "y_true", "score", "method", "gamma", "prefilter_space", "k"} <= set(scores.columns)
     cfg = json.loads((out / "config.json").read_text(encoding="utf-8"))
     assert cfg["experiment"] == "RQ2_mvp" and cfg["source_pi_sha256"] and cfg["fewshot_splits_sha256"] and cfg["gamma_rule"] == "fixed"
     mvp.main(argv)                                            # chạy lại: resume, không thêm dòng
@@ -222,7 +225,7 @@ def test_e_gamma_choice_ignores_test_labels(data_root):
     mvp = _load("run_rq2_mvp")
     ds, ctx, cid, pi, _, runs = _setup(data_root)
     split, seed, subset, n_t, tr, te = runs[0]
-    call = lambda: mvp.run_job(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, K, [0.0, 1.0], set(), set(), PREFILTER, False, "m5_cv")
+    call = lambda: mvp.run_job(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, K, [0.0, 1.0], set(), set(), PREFILTER, False, "cv")
     rows, _, _, path = call()
     index = {s: i for i, s in enumerate(ds.sample_ids)}
     te_idx = np.array([index[s] for s in te])
@@ -235,25 +238,30 @@ def test_e_gamma_choice_ignores_test_labels(data_root):
 
 def test_main_gamma_cv_outputs_and_resumes(data_root):
     mvp = _load("run_rq2_mvp")
-    base = ["--datasets", COHORT, "--k", *map(str, K), "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--out", "RQ2_cv"]
+    base = ["--datasets", COHORT, "--k", *map(str, K), "--gamma", "0", "1", "2", "--n-t", "5", "--prefilter", str(PREFILTER), "--arms", "mvp", "--out", "RQ2_cv"]
     mvp.main([*base, "--gamma-rule", "fixed"])                     # fixed trước, m5_cv sau: không được nhân đôi dòng fixed
     mvp.main(base)
     out = data_root / "results" / "survey_v2" / "RQ2_cv" / COHORT
     per_run = pd.read_csv(out / "rq2_mvp_per_run.csv", dtype={"n_t": str})
-    fixed, cv = per_run[per_run.gamma_rule == "fixed"], per_run[per_run.gamma_rule == "m5_cv"]
-    assert len(fixed) == 20 * len(K) * 2 and len(cv) == 20 * len(K)
-    assert fixed.groupby(["split", "subset", "n_t", "gamma", "k"]).size().max() == 1
-    assert cv.groupby(["split", "subset", "n_t", "k"]).size().max() == 1
+    fixed = per_run[per_run.gamma_rule == "fixed"]
+    assert len(fixed) == 20 * len(K) * 4                           # γ = 0 hai không gian gen, γ = 1, γ = 2
+    assert fixed.groupby(["split", "subset", "n_t", "gamma", "prefilter_space", "k"]).size().max() == 1
     path = pd.read_csv(out / "rq2_mvp_gamma_path.csv", dtype={"n_t": str})
     assert list(path.columns) == ["cohort", "split", "seed", "subset", "n_t", "k", "gamma", "oof_logloss", "oof_brier", "oof_auroc",
-                                  "n_folds", "n_repeats", "selected"]
-    assert len(path) == 20 * len(K) * 2 and path.groupby(["split", "subset", "n_t", "k"]).selected.sum().eq(1).all()
-    picked = path[path.selected].merge(cv, on=["split", "subset", "n_t", "k"], suffixes=("_path", ""))
-    assert (picked.gamma_path == picked.gamma).all() and len(picked) == len(cv)
-    same = cv.merge(fixed, on=["split", "subset", "n_t", "k", "gamma"], suffixes=("", "_fixed"))
-    assert len(same) == len(cv) and (same.auroc == same.auroc_fixed).all()   # dòng m5_cv là chỉ số của đúng γ đã chọn
-    assert (same.select_time_s > same.select_time_s_fixed).all()             # có tính cả thời gian CV chọn γ
-    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["gamma_rule"] == "m5_cv"
+                                  "n_folds", "n_repeats", "selected_m5_pos", "selected_m5_cv"]
+    assert len(path) == 20 * len(K) * 3
+    for rule in ("m5_pos", "m5_cv"):
+        cv = per_run[per_run.gamma_rule == rule]
+        assert len(cv) == 20 * len(K) and cv.groupby(["split", "subset", "n_t", "k"]).size().max() == 1
+        assert path.groupby(["split", "subset", "n_t", "k"])[f"selected_{rule}"].sum().eq(1).all()
+        picked = path[path[f"selected_{rule}"]].merge(cv, on=["split", "subset", "n_t", "k"], suffixes=("_path", ""))
+        assert (picked.gamma_path == picked.gamma).all() and len(picked) == len(cv)
+        same = cv.merge(fixed, on=["split", "subset", "n_t", "k", "gamma", "prefilter_space"], suffixes=("", "_fixed"))
+        assert len(same) == len(cv) and (same.auroc == same.auroc_fixed).all()   # dòng quy tắc là chỉ số của đúng γ đã chọn
+        assert (same.select_time_s > same.select_time_s_fixed).all()             # có tính cả thời gian CV chọn γ
+    assert (per_run[per_run.gamma_rule == "m5_pos"].gamma > 0).all()               # QĐ49: m5_pos không bao giờ tắt nguồn
+    assert (per_run.loc[(per_run.gamma_rule == "m5_cv") & (per_run.gamma == 0), "prefilter_space"] == "target").all()
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["gamma_rule"] == "cv"
     mvp.main(base)                                                 # chạy lại: resume, không thêm dòng
     assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
     assert len(pd.read_csv(out / "rq2_mvp_gamma_path.csv")) == len(path)
@@ -294,6 +302,7 @@ def test_b_source_weights_recover_more_signal_genes_at_small_n(synthetic_all, da
     hits = {0.0: [], 1.0: []}
     for split, seed, subset, n_t, tr, te in runs:
         _, genes, _ = mvp.run_one(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, [5], [0.0, 1.0], set(), PREFILTER, False)
+        genes = [g for g in genes if g["gamma"] > 0 or g["prefilter_space"] == "target"]     # γ = 0 ở đây là target-only
         for gamma in hits:
             hits[gamma].append(sum(g["gene"] in signal for g in genes if g["gamma"] == gamma))
     assert np.mean(hits[1.0]) > np.mean(hits[0.0])
@@ -312,7 +321,7 @@ def test_c_saturation_fills_with_ftest_when_k_exceeds_l1_capacity(synthetic_all,
     assert all(r["n_selected"] == 10 for r in rows)
     assert any(r["n_filled"] > 0 for r in rows)
     assert all(not r["exact_k"] for r in rows if r["n_filled"] > 0)     # chiều ngược không đúng: M6 cắt còn k gen thì n_filled = 0
-    panels = pd.DataFrame(genes).groupby(["split", "subset", "gamma"]).gene.agg(["size", "nunique"])
+    panels = pd.DataFrame(genes).groupby(["split", "subset", "gamma", "prefilter_space"]).gene.agg(["size", "nunique"])
     assert (panels["size"] == 10).all() and (panels["nunique"] == 10).all()
 
 
@@ -386,7 +395,7 @@ def test_main_early_tcga_compares_three_arms_without_target_leak(data_root):
     assert summary.ihc_panel_rate.between(0, 1).all()
     pick = lambda arm: summary[(summary.arm == arm) & (summary.n_t == "5") & (summary.k == 5)].iloc[0]
     rows = per_run[(per_run.n_t == "5") & (per_run.k == 5)]
-    target = rows[(rows.gamma_rule == "fixed") & (rows.gamma == 0)]
+    target = rows[(rows.gamma_rule == "fixed") & (rows.gamma == 0) & (rows.prefilter_space == "target")]
     assert pick("target_only").auroc_mean == pytest.approx(target.auroc.mean())
     assert pick("target_only").auroc_sd == pytest.approx(target.auroc.std())
     assert pick("target_only").ihc_panel_rate == pytest.approx((target.n_ihc_in_panel > 0).mean())
@@ -443,3 +452,115 @@ def test_extended_grid_leaves_panels_reachable_on_base_grid_unchanged():
     old = select_sparse_exact_k(zscore_apply(X, *zscore_fit(X)) / w, y, [2], "l1_lr", seed=1, c_grid=BASE_C_GRID)
     assert old.info["n_filled"][2] == 0
     assert np.array_equal(select_weighted(X, y, pi, 1.0, [2], seed=1).panels[2], old.panels[2])
+
+
+# --- Review 07/11: QĐ49 (m5_pos), QĐ51 (không gian gen của nguồn) ---------------------------------------------------------
+def test_pick_gamma_positive_ignores_zero_candidate():
+    """QĐ49: γ = 0 có log-loss tốt nhất vẫn không được chọn; giữa các γ > 0 vẫn đúng biên 0,01; không có γ > 0 thì không chọn."""
+    from survey_v2.mvp import pick_gamma_positive
+
+    assert pick_gamma_positive({0.0: 0.10, 0.5: 0.70, 1.0: 0.695, 2.0: 0.692}) == 0.5
+    assert pick_gamma_positive({0.0: 0.10, 0.5: 0.70, 1.0: 0.69, 2.0: 0.685}) == 1.0
+    assert pick_gamma_positive({0.0: 0.10}) is None
+
+
+def test_gamma0_on_source_space_selects_inside_ctx_pre(data_root):
+    """QĐ51: γ = 0/source chọn gen trong ctx.pre; γ = 0/target không bị giới hạn ở đó."""
+    mvp = _load("run_rq2_mvp")
+    ds, ctx, cid, pi, _, runs = _setup(data_root)
+    allowed = set(ctx.genes[ctx.pre].tolist())
+    src, tgt = [], []
+    for split, seed, subset, n_t, tr, te in runs:
+        rows, genes, _ = mvp.run_one(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, K, [0.0], set(), PREFILTER, False)
+        assert sorted(r["prefilter_space"] for r in rows) == ["source"] * len(K) + ["target"] * len(K)
+        src += [g["gene"] for g in genes if g["prefilter_space"] == "source"]
+        tgt += [g["gene"] for g in genes if g["prefilter_space"] == "target"]
+    assert set(src) <= allowed
+    assert set(tgt) - allowed                                      # không có dòng này thì nhánh target đang lọc nhầm trên nguồn
+
+
+def test_m5_rules_use_target_row_when_gamma0_chosen(data_root):
+    """Dòng m5_cv chọn γ = 0 phải là chỉ số của target-only, không phải nhánh cơ chế γ = 0/source. Không có γ > 0 thì không có m5_pos."""
+    mvp = _load("run_rq2_mvp")
+    ds, ctx, cid, pi, _, runs = _setup(data_root)
+    split, seed, subset, n_t, tr, te = runs[0]
+    rows, _, _, path = mvp.run_job(ctx, ds, cid, pi, split, seed, subset, n_t, tr, te, K, [0.0], set(), set(), PREFILTER, False, "cv")
+    by = {(r["gamma_rule"], r["prefilter_space"], r["k"]): r for r in rows}
+    assert not any(r["gamma_rule"] == "m5_pos" for r in rows)
+    for k in K:
+        assert by[("m5_cv", "target", k)]["auroc"] == by[("fixed", "target", k)]["auroc"]
+    assert path and all(p["selected_m5_cv"] and not p["selected_m5_pos"] for p in path)
+
+
+# --- Review 07/11 Bảng 7 bước 3, 4: nhánh D3 và IHC phải trùng E7, E1b để qua cổng bằng nhau -----------------------------------
+METRICS = ("auroc", "bacc", "mcc", "logloss", "brier")
+
+
+def _runs_with_cv(ds, runs):
+    """Thêm các lần chạy n_T = 20: n_T ≤ 10 dùng C = 1 cố định nên seed không có tác dụng, chỉ n_T ≥ 20 mới lộ seed sai (M5, CV nội bộ chọn C)."""
+    from survey_v2.fewshot import fewshot_runs
+
+    man = pd.read_csv(ds.data_dir / "fewshot_splits.csv", dtype={"n_t": str})
+    return runs + [r for r in fewshot_runs(man) if r[3] == "20"]
+
+
+def test_d3_rows_match_e7_run_one(data_root):
+    """Hỏng nếu đổi seed (77) hay gọi hàm khác TransferContext của E7."""
+    e7, mvp = _load("run_survey_e7_transfer_naive"), _load("run_rq2_mvp")
+    ds, ctx, cid, pi, _, runs = _setup(data_root)
+    pi_by_gene = mvp._pi_by_gene(ctx, pi)
+    for split, seed, subset, n_t, tr, te in _runs_with_cv(ds, runs):
+        e_rows, e_genes = e7.run_one(ctx, ds, cid, split, seed, subset, n_t, tr, te, ["select_on_source", "pooled"], K, set())
+        m_rows, m_genes, _ = mvp.d3_rows(ctx, ds, cid, pi_by_gene, split, seed, subset, n_t, tr, te, K, set(), False)
+        assert [(r["strategy"], r["k"]) for r in e_rows] == [(r["method"], r["k"]) for r in m_rows] and len(m_rows) == 2 * len(K)
+        for e, m in zip(e_rows, m_rows):
+            for col in METRICS:
+                assert abs(e[col] - m[col]) < 1e-12, (split, subset, n_t, m["method"], m["k"], col)
+        assert [(g["strategy"], g["k"], g["gene"]) for g in e_genes] == [(g["method"], g["k"], g["gene"]) for g in m_genes]
+    assert all(r["gamma_rule"] == "none" and np.isnan(r["gamma"]) and r["prefilter_space"] == "source" for r in m_rows)
+
+
+def test_d3_rows_only_at_transfer_n_t_levels(data_root):
+    """E7 chỉ có n_T ∈ {5, 10, 20}; mức khác không có đối chứng để so nên không được sinh dòng."""
+    mvp = _load("run_rq2_mvp")
+    ds, ctx, cid, pi, _, runs = _setup(data_root)
+    split, seed, subset, _, tr, te = runs[0]
+    for n_t in ("40", "pool"):
+        assert mvp.d3_rows(ctx, ds, cid, mvp._pi_by_gene(ctx, pi), split, seed, subset, n_t, tr, te, K, set(), True) == ([], [], [])
+
+
+def test_ihc_rows_match_e1b_run_one(data_root):
+    """Hỏng nếu đổi seed (90) của panel cố định. Panel IHC có k riêng, không theo K."""
+    e1b, mvp = _load("run_survey_e1b_learning_curve"), _load("run_rq2_mvp")
+    ds, ctx, cid, pi, _, runs = _setup(data_root)
+    pi_by_gene = mvp._pi_by_gene(ctx, pi)
+    for split, seed, subset, n_t, tr, te in _runs_with_cv(ds, runs):
+        e_rows, e_genes, _ = e1b.run_one(ds, cid, split, seed, subset, n_t, tr, te, ["ihc_2", "ihc_4"], K, SimpleNamespace(prefilter=PREFILTER, random_draws=0))
+        m_rows, m_genes, _ = mvp.ihc_rows(ctx, ds, cid, pi_by_gene, split, seed, subset, n_t, tr, te, K, set(), False)
+        assert [(r["method"], r["k"]) for r in m_rows] == [("ihc_2", 2), ("ihc_4", 4)] == [(r["method"], r["k"]) for r in e_rows]
+        for e, m in zip(e_rows, m_rows):
+            for col in METRICS:
+                assert abs(e[col] - m[col]) < 1e-12, (split, subset, n_t, m["method"], col)
+        assert [(g["method"], g["gene"]) for g in e_genes] == [(g["method"], g["gene"]) for g in m_genes]
+
+
+def test_main_default_arms_write_every_method_with_scores_and_resume(data_root):
+    """Mặc định chạy đủ ba nhánh: một lần chạy cho MVP, D3, IHC cùng tệp; điểm từng mẫu có cả đối chứng; chạy lại không nhân đôi."""
+    mvp = _load("run_rq2_mvp")
+    argv = ["--datasets", COHORT, "--k", *map(str, K), "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--save-scores", "--out", "RQ2_arms"]
+    mvp.main(argv)
+    out = data_root / "results" / "survey_v2" / "RQ2_arms" / COHORT
+    per_run = pd.read_csv(out / "rq2_mvp_per_run.csv", dtype={"n_t": str})
+    assert per_run.groupby(["method", "gamma_rule"], dropna=False).size().to_dict() == {
+        ("ihc_2", "none"): 20, ("ihc_4", "none"): 20, ("mvp", "fixed"): 20 * 2 * 3, ("mvp", "m5_cv"): 20 * 2, ("mvp", "m5_pos"): 20 * 2,
+        ("pooled", "none"): 20 * 2, ("select_on_source", "none"): 20 * 2}
+    scores = pd.read_csv(out / "rq2_mvp_scores.csv", dtype={"n_t": str})
+    assert set(scores.method) == {"mvp", "select_on_source", "pooled", "ihc_2", "ihc_4"}
+    genes = pd.read_csv(out / "rq2_mvp_selected_genes.csv", dtype={"n_t": str})
+    assert set(genes.method) == {"mvp", "select_on_source", "pooled", "ihc_2", "ihc_4"}
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["arms"] == ["mvp", "d3", "ihc"]
+    n_genes, n_scores = len(genes), len(scores)
+    mvp.main(argv)
+    assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
+    assert len(pd.read_csv(out / "rq2_mvp_selected_genes.csv")) == n_genes
+    assert len(pd.read_csv(out / "rq2_mvp_scores.csv")) == n_scores
