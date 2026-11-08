@@ -335,3 +335,32 @@ def test_cmd_run_stops_with_code_2_on_version_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(kj, "current_versions", lambda: dict(REF_VERSIONS))
     monkeypatch.setattr(kj.time, "sleep", lambda s: None)
     assert kj.cmd_run(job, None, tmp_path / "logs") == 0 and marker.exists()
+
+
+def _code_cells(path: Path) -> list[str]:
+    nb = json.loads(path.read_text(encoding="utf-8"))
+    return ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+
+
+def test_rq2_mvp_notebook_has_pip_pins_installed_before_any_import():
+    """QĐ70: PIP_PINS ở ô cấu hình (mặc định rỗng); Gate 2 cài đúng ==phiên bản trước khi import numpy/pandas/scipy/sklearn."""
+    cells = _code_cells(REPO / "notebooks" / "kaggle" / "kaggle_rq2_mvp.ipynb")
+    assert "\nPIP_PINS = {}" in cells[0]
+    gate2 = next(c for c in cells if c.startswith("# Gate 2"))
+    install, imports = gate2.index("if PIP_PINS:"), gate2.index("for mod in (")
+    assert install < imports and "f'{p}=={v}'" in gate2[install:imports] and "check=True" in gate2[install:imports]
+    assert not any("import numpy" in c or "import pandas" in c for c in cells[:2])
+
+
+@pytest.mark.parametrize("exp", [e for e in mk.EXPERIMENTS if e.file != "kaggle_rq2_mvp.ipynb"], ids=lambda e: e.file)
+def test_other_notebooks_have_no_pip_pins(exp):
+    assert not any("PIP_PINS" in c for c in _code_cells(REPO / "notebooks" / "kaggle" / exp.file))
+
+
+def test_version_mismatch_prints_pip_pins_line_to_paste(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    job = kj.Job("x", "b", "w", shards=[["-c", "pass"]], outputs=[], pin_versions=["E1b/a/config.json"])
+    monkeypatch.setattr(kj, "current_versions", lambda: dict(REF_VERSIONS, numpy="2.2.0", scipy="1.17.0"))
+    _write_ref_configs(kj.results_root(), {"E1b/a/config.json": REF_VERSIONS})
+    assert kj.cmd_run(job, None, tmp_path / "logs") == 2
+    assert "PIP_PINS = {'numpy': '2.1.3', 'scipy': '1.16.3'}" in capsys.readouterr().out

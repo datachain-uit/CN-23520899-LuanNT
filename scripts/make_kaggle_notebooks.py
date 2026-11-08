@@ -42,6 +42,14 @@ class Experiment:
     order: str          # hướng dẫn thứ tự phiên (markdown)
     repo_branch: str | None = None   # nhánh clone nếu khác runner (bài 2: rq2-mvp); notebook survey giữ nhánh của runner
     repo_url: str | None = None      # repo clone nếu khác runner (bài 2: repo cá nhân); notebook survey giữ repo của runner
+    pip_pins: bool = False           # QĐ70: biến PIP_PINS ở ô cấu hình, Gate 2 cài ==phiên bản trước mọi import (chỉ rq2_mvp)
+
+
+PIP_PINS_CFG = ("PIP_PINS = {}                  # QĐ70: rỗng = giữ thư viện của image; khi `run` dừng mã 2 vì lệch phiên bản, "
+                "dán dòng PIP_PINS = {...} mà nó in ra")
+PIP_PINS_INSTALL = (
+    "if PIP_PINS:                   # QĐ70: cài đúng phiên bản của E1b, E7 trước khi import (kaggle_jobs.py chạy ở tiến trình con, nhận bản mới)\n"
+    "    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', *[f'{p}=={v}' for p, v in PIP_PINS.items()]], check=True)\n")
 
 
 EXPERIMENTS = [
@@ -155,7 +163,7 @@ EXPERIMENTS = [
         ["rq2_mvp"],
         "**Chỉ chạy sau khi GVHD xác nhận KBTN v2.4.** Một phiên, khôi phục đúng thứ tự `e7` rồi `panels` (E1b mới nhất nằm trong `panels`). Push nhánh và ghim "
         "`REPO_COMMIT` trước khi chạy.",
-        repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
+        repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git", pip_pins=True),
 ]
 
 JOB_LINE_PREFIX = "JOB = "
@@ -206,6 +214,14 @@ def build(exp: Experiment, runner: dict, jobs) -> dict:
         if value:
             j = next(k for k, line in enumerate(cfg) if line.startswith(prefix))
             cfg[j] = f"{prefix}{value!r}"
+    if exp.pip_pins:
+        j = next(k for k, line in enumerate(cfg) if line.startswith("RUN_TESTS = "))
+        cfg.insert(j + 1, PIP_PINS_CFG)
+        gate2 = next(c for c in cells if c["cell_type"] == "code" and _src(c).startswith("# Gate 2"))
+        text = _src(gate2)
+        assert "\nfor mod in (" in text, "runner đổi Gate 2 — sửa generator"
+        text = text.replace("\nfor mod in (", "\n" + PIP_PINS_INSTALL + "for mod in (", 1)
+        gate2["source"] = text if isinstance(gate2["source"], str) else _lines(text)   # giữ dạng source của runner
     cells[1]["source"] = _lines("\n".join(cfg))
     for c in cells:
         if c["cell_type"] == "code":

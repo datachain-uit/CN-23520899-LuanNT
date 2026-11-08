@@ -558,8 +558,8 @@ def cmd_run(job: Job, parallel: int | None, log_dir: Path, max_hours: float | No
     if bad_versions:
         print("PHIÊN BẢN THƯ VIỆN KHÁC THAM CHIẾU (QĐ70) — không chạy:\n  " + "\n  ".join(bad_versions))
         if pins:
-            print("cài đúng phiên bản rồi khởi động lại kernel và chạy lại JOB:\n  pip install "
-                  + " ".join(f"{p}=={v}" for p, v in pins.items()))
+            print("cài đúng phiên bản rồi chạy lại JOB — notebook rq2_mvp: dán vào ô cấu hình\n  PIP_PINS = " + repr(pins)
+                  + "\n  (tương đương pip install " + " ".join(f"{p}=={v}" for p, v in pins.items()) + ")")
         return 2
     commit = head_commit()
     deadline = time.time() + max_hours * 3600 if max_hours else None
