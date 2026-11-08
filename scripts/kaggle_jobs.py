@@ -34,6 +34,8 @@ quả đã có; (4) `tables` chạy lại sau `panels` (bảng ablation IHC và 
 
 Bài 2 (Review 03/11/2026, QĐ37): việc `rq2_early` là thử nghiệm sớm PC-04 trên TCGA; code chỉ có ở nhánh rq2-mvp.
 Review 07/11/2026: việc `rq2_mvp` chạy RQ2 trên 4 cohort; `gates` là các lệnh chạy trong bước verify, thoát khác 0 thì việc không đạt (QĐ51: cổng bằng nhau).
+Review 08/11/2026 (QĐ70): `pin_versions` — trước khi chạy, numpy, pandas, scipy, scikit-learn của phiên phải trùng trường
+versions trong config.json của E1b, E7 đã khôi phục; lệch thì dừng mã 2 và in lệnh pip install == cần chạy.
 """
 
 from __future__ import annotations
@@ -88,6 +90,7 @@ class Job:
     restore_from: list = field(default_factory=list)  # output các việc phải gắn làm Input, THEO THỨ TỰ GIẢI NÉN (mới nhất cuối)
     requires_cfg: list = field(default_factory=list)  # (config.json tương đối, khoá, giá trị): bằng nhau, hoặc thuộc danh sách
     gates: list = field(default_factory=list)       # lệnh chạy ở bước verify (mỗi phần tử: list đối số sau "python"); thoát khác 0 là không đạt
+    pin_versions: list = field(default_factory=list)  # config.json tham chiếu (tương đối results/survey_v2): PINNED_PACKAGES của phiên phải trùng trường versions (QĐ70)
     parallel: int = 4
     exclusive: bool = False
     hours: str = ""
@@ -240,7 +243,8 @@ def build_jobs() -> dict[str, Job]:
                  [f"RQ2_mvp/{d}" for d in GEO],
                  requires=[f"E1b/{d}/e1b_per_run.csv" for d in GEO] + [f"E7/{d}/e7_per_run.csv" for d in GEO],
                  requires_cfg=[(f"E1b/{d}/config.json", "methods_in_results", m) for d in GEO for m in ("l1_lr", "ihc_2", "ihc_4")],
-                 restore_from=["e7", "panels"], gates=[["scripts/check_rq2_equality.py"]], parallel=1, hours="2–3"))
+                 restore_from=["e7", "panels"], gates=[["scripts/check_rq2_equality.py"]],
+                 pin_versions=[f"E1b/{d}/config.json" for d in GEO] + [f"E7/{d}/config.json" for d in GEO], parallel=1, hours="2–3"))
     return {j.name: j for j in J}
 
 
@@ -293,6 +297,50 @@ def check_requires(job: Job) -> list[str]:
         if not ok:
             missing.append(f"{rel}: {key} = {value!r}, cần {expected!r} (khôi phục đúng output và đúng thứ tự: {', '.join(job.restore_from)})")
     return missing
+
+
+PINNED_PACKAGES = ("numpy", "pandas", "scipy", "scikit-learn")
+
+
+def current_versions() -> dict:
+    """Phiên bản PINNED_PACKAGES của môi trường đang chạy (None nếu chưa cài)."""
+    from importlib import metadata
+    out = {}
+    for p in PINNED_PACKAGES:
+        try:
+            out[p] = metadata.version(p)
+        except metadata.PackageNotFoundError:
+            out[p] = None
+    return out
+
+
+def check_versions(job: Job, current: dict | None = None) -> tuple[list[str], dict]:
+    """QĐ70 (Review 08/11): PINNED_PACKAGES của phiên phải trùng trường versions trong config.json của các đầu vào tham
+    chiếu (E1b, E7 đã khôi phục). Trả (vấn đề, {gói: phiên bản cần cài}); bản cần cài chỉ có khi tham chiếu đọc được và
+    thống nhất, để không đoán phiên bản."""
+    if not job.pin_versions:
+        return [], {}
+    root = results_root()
+    problems, expected = [], {}
+    for rel in job.pin_versions:
+        path = root / rel
+        try:
+            versions = json.loads(path.read_text(encoding="utf-8")).get("versions") or {}
+        except (OSError, ValueError) as exc:
+            problems.append(f"{rel}: không đọc được trường versions ({exc})")
+            continue
+        for p in PINNED_PACKAGES:
+            v = versions.get(p)
+            if not v:
+                problems.append(f"{rel}: versions thiếu {p}")
+            elif expected.setdefault(p, (v, rel))[0] != v:
+                problems.append(f"{p}: tham chiếu không thống nhất ({expected[p][1]}: {expected[p][0]}; {rel}: {v})")
+    if problems:
+        return problems, {}
+    current = current_versions() if current is None else current
+    pins = {p: v for p, (v, _) in expected.items() if current.get(p) != v}
+    problems = [f"{p}: phiên {current.get(p)}, tham chiếu {v} ({expected[p][1]})" for p, v in pins.items()]
+    return problems, pins
 
 
 TIMEOUT_CODE = 124
@@ -486,6 +534,8 @@ def cmd_show(job: Job):
     print("cần có:", ", ".join(job.requires) or "—")
     if job.requires_cfg:
         print("config.json cần đạt:", "; ".join(f"{r}: {k} ∋ {v!r}" for r, k, v in job.requires_cfg))
+    if job.pin_versions:
+        print(f"phiên bản {', '.join(PINNED_PACKAGES)} phải trùng versions của:", ", ".join(job.pin_versions))
     for s in job.shards:
         print("  python", " ".join(render(s)) if os.environ.get("KLTN_DATA_ROOT") else " ".join(s))
     for s in job.finalize:
@@ -503,6 +553,13 @@ def cmd_run(job: Job, parallel: int | None, log_dir: Path, max_hours: float | No
         return 2
     if job.name == "panels" and not PUBLISHED_PANELS:
         print("panels: survey_v2/panels/published_panels.csv chưa có panel nào")
+        return 2
+    bad_versions, pins = check_versions(job)
+    if bad_versions:
+        print("PHIÊN BẢN THƯ VIỆN KHÁC THAM CHIẾU (QĐ70) — không chạy:\n  " + "\n  ".join(bad_versions))
+        if pins:
+            print("cài đúng phiên bản rồi khởi động lại kernel và chạy lại JOB:\n  pip install "
+                  + " ".join(f"{p}=={v}" for p, v in pins.items()))
         return 2
     commit = head_commit()
     deadline = time.time() + max_hours * 3600 if max_hours else None

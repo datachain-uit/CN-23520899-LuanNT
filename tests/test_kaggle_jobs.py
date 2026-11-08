@@ -271,3 +271,67 @@ def test_runner_archive_name_has_commit_and_still_matches_restore_glob(path):
     code = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
     assert "f'{JOB}_{commit_hash[:7]}_results.zip'" in code
     assert "rglob('*_results.zip')" in code and fnmatch.fnmatch("rq2_mvp_abc1234_results.zip", "*_results.zip")
+
+
+# ------------------------------------------------------------------ QĐ70 (Review 08/11): kiểm phiên bản trước khi chạy rq2_mvp
+REF_VERSIONS = {"numpy": "2.1.3", "pandas": "2.3.3", "scipy": "1.16.3", "scikit-learn": "1.6.1"}
+
+
+def _write_ref_configs(root: Path, versions_by_rel: dict):
+    for rel, versions in versions_by_rel.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"traceable": True, "versions": versions}), encoding="utf-8")
+
+
+def test_rq2_mvp_job_pins_versions_of_e1b_and_e7():
+    job = kj.JOBS["rq2_mvp"]
+    assert set(job.pin_versions) == {f"E1b/{d}/config.json" for d in kj.GEO} | {f"E7/{d}/config.json" for d in kj.GEO}
+    assert set(kj.PINNED_PACKAGES) == set(REF_VERSIONS)
+
+
+def test_check_versions_passes_when_session_matches(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    job = kj.Job("x", "b", "w", shards=[], outputs=[], pin_versions=["E1b/a/config.json", "E7/a/config.json"])
+    _write_ref_configs(kj.results_root(), {r: dict(REF_VERSIONS, tables="3.9") for r in job.pin_versions})
+    assert kj.check_versions(job, current=dict(REF_VERSIONS)) == ([], {})
+
+
+def test_check_versions_reports_mismatch_and_pip_pins(tmp_path, monkeypatch):
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    job = kj.Job("x", "b", "w", shards=[], outputs=[], pin_versions=["E1b/a/config.json"])
+    _write_ref_configs(kj.results_root(), {"E1b/a/config.json": REF_VERSIONS})
+    problems, pins = kj.check_versions(job, current=dict(REF_VERSIONS, **{"scikit-learn": "1.7.0"}))
+    assert len(problems) == 1 and "scikit-learn" in problems[0] and "1.7.0" in problems[0] and "1.6.1" in problems[0]
+    assert pins == {"scikit-learn": "1.6.1"}
+
+
+@pytest.mark.parametrize("case", ["missing_cfg", "missing_field", "refs_disagree"])
+def test_check_versions_refuses_unusable_references(tmp_path, monkeypatch, case):
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    job = kj.Job("x", "b", "w", shards=[], outputs=[], pin_versions=["E1b/a/config.json", "E7/a/config.json"])
+    refs = {"E1b/a/config.json": REF_VERSIONS, "E7/a/config.json": REF_VERSIONS}
+    if case == "missing_cfg":
+        refs.pop("E7/a/config.json")
+    elif case == "missing_field":
+        refs["E7/a/config.json"] = {k: v for k, v in REF_VERSIONS.items() if k != "scipy"}
+    else:
+        refs["E7/a/config.json"] = dict(REF_VERSIONS, numpy="2.0.0")
+    _write_ref_configs(kj.results_root(), refs)
+    problems, pins = kj.check_versions(job, current=dict(REF_VERSIONS))
+    assert problems and pins == {}
+
+
+def test_cmd_run_stops_with_code_2_on_version_mismatch(tmp_path, monkeypatch):
+    """Bảng 7 bước 1: config giả lệch phiên bản -> mã 2, không chạy shard nào; trùng -> chạy."""
+    monkeypatch.setenv("KLTN_DATA_ROOT", str(tmp_path))
+    marker = tmp_path / "ran.txt"
+    job = kj.Job("x", "b", "w", shards=[["-c", f"open(r'{marker}', 'w').write('1')"]], outputs=[],
+                 pin_versions=["E1b/a/config.json"], parallel=1)
+    monkeypatch.setattr(kj, "write_pip_freeze", lambda *a, **k: None)
+    monkeypatch.setattr(kj, "current_versions", lambda: dict(REF_VERSIONS, numpy="2.2.0"))
+    _write_ref_configs(kj.results_root(), {"E1b/a/config.json": REF_VERSIONS})
+    assert kj.cmd_run(job, None, tmp_path / "logs") == 2 and not marker.exists()
+    monkeypatch.setattr(kj, "current_versions", lambda: dict(REF_VERSIONS))
+    monkeypatch.setattr(kj.time, "sleep", lambda s: None)
+    assert kj.cmd_run(job, None, tmp_path / "logs") == 0 and marker.exists()
