@@ -36,10 +36,10 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from survey_v2 import config as C  # noqa: E402
 from survey_v2.data import sha256  # noqa: E402
-from survey_v2.runlog import DATA_ROOT  # noqa: E402
+from survey_v2.runlog import DATA_ROOT, start_run  # noqa: E402
 from scripts.check_sex_consistency import sex_table  # noqa: E402
 from scripts.geo_sample_qc import parse_sex, row_corr, zscore_genes  # noqa: E402
-from scripts.provenance import require, stamp  # noqa: E402
+from scripts.provenance import stamp  # noqa: E402
 
 NAME = "gse30219_bas"
 BASE = "gse30219"
@@ -254,7 +254,7 @@ def main(argv=None, script=__file__) -> int:
     args = parse_args(argv)
     base = args.base_dir or resolve_dataset_dir(DATA_ROOT, BASE)
     out = args.out or DATA_ROOT / C.GEO_TARGET_DIR / NAME
-    prov = require(script, data_files=[args.series_matrix, args.annotation, base / "expression.h5", base / "metadata.csv"])
+    prov = start_run(script, data_files=[args.series_matrix, args.annotation, base / "expression.h5", base / "metadata.csv"])   # cây sạch + HEAD đã push
     cfg = write_variant(build_variant(args.series_matrix, args.annotation, base), out, prov)
     print(json.dumps({k: cfg[k] for k in ("n_before_qc", "n_after_qc", "n_per_class", "n_bas_before_qc", "n_bas_kept", "bas_fraction_of_lusc",
                                          "excluded_bas", "r5_newly_flagged", "n_duplicate_pairs")}, ensure_ascii=False, indent=2))
