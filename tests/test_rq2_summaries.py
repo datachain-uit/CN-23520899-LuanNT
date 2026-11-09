@@ -152,6 +152,43 @@ def test_sensitivity_rows_have_expected_k_star(tmp_path):
     assert len(main_table) == 8
 
 
+def _add_part_b(root, bas_diff=DIFF, ftest_diff=None):
+    """E1_classification_bas/gse30219_bas (B0 + l1_lr riêng) và E1_classification_ftest2000 (chỉ l1_lr; B0 lấy từ bản chính)."""
+    frame = _per_fold(["gse30219_bas"], bas_diff, seed=3)
+    (root / "E1_classification_bas" / "gse30219_bas").mkdir(parents=True)
+    frame.to_csv(root / "E1_classification_bas" / "gse30219_bas" / "classification_per_fold.csv", index=False)
+    main = pd.concat([pd.read_csv(root / "E1_classification" / c / "classification_per_fold.csv") for c in COHORTS3])
+    b0 = main[(main.method == "b0") & (main.model == "lr_l2")].set_index(["cohort", "repeat", "fold"]).auroc
+    rng, rows = np.random.default_rng(5), []
+    for (c, r, f), a in b0.items():
+        for k, d in (ftest_diff or {**DIFF, 5: 0.0, 4: 0.0}).items():
+            rows.append({"cohort": c, "repeat": r, "fold": f, "method": "l1_lr", "k": k, "model": "lr_l2", "auroc": a + d + rng.normal(0, 0.002)})
+    ft = pd.DataFrame(rows)
+    for c in COHORTS3:
+        (root / "E1_classification_ftest2000" / c).mkdir(parents=True)
+        ft[ft.cohort == c].to_csv(root / "E1_classification_ftest2000" / c / "classification_per_fold.csv", index=False)
+    return root
+
+
+def test_part_b_rows_use_bas_variant_and_ftest_panels_with_main_b0(tmp_path):
+    """QĐ53b: BAS → LUSC thay gse30219 bằng gse30219_bas; F-test 2.000 lấy L1-LR của thư mục riêng và B0 của bản chính."""
+    m = _load("make_rq1_sensitivity")
+    summary, by_k, _ = m.build(_add_part_b(_rq1_root(tmp_path)))
+    rows = summary.set_index("config")
+    assert list(rows.index) == ["main", "four_cohorts", "no_ihc", "bas_lusc", "ftest2000"]
+    assert rows.loc["bas_lusc", "cohorts"] == "gse10245,gse30219_bas,gse37745" and rows.loc["bas_lusc", "k_star_both"] == 10
+    assert rows.loc["ftest2000", "cohorts"] == ",".join(COHORTS3) and rows.loc["ftest2000", "k_star_both"] == 4    # dữ liệu giả: F-test đạt tới k = 4
+    assert -0.02 < rows.loc["ftest2000", "lb_ivw_k10"] < 0.0          # ghép đúng B0 chính theo (cohort, repeat, fold): chênh ≈ 0 ± nhiễu nhỏ
+
+
+def test_part_b_is_skipped_until_its_outputs_exist(tmp_path):
+    m = _load("make_rq1_sensitivity")
+    summary, _, _ = m.build(_rq1_root(tmp_path))
+    assert list(summary.config) == ["main", "four_cohorts", "no_ihc"]
+    with pytest.raises(FileNotFoundError, match="E1_classification_bas"):
+        m.build(_rq1_root(tmp_path / "x"), require_part_b=True)
+
+
 def test_rf_rows_do_not_enter_k_star(tmp_path):
     """Dòng model = rf có AUROC 0 sẽ kéo k* về None nếu lọc sai."""
     m = _load("make_rq1_sensitivity")

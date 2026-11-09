@@ -233,6 +233,31 @@ def variance_prefilter(X_train: np.ndarray, p0: int = C.PREFILTER_P0) -> np.ndar
     return np.sort(keep)
 
 
+def ftest_prefilter(X_train: np.ndarray, y_train: np.ndarray, p0: int) -> np.ndarray:
+    """Độ nhạy RQ1 (QĐ53b): p0 gen có thống kê F (ANOVA hai lớp) lớn nhất TRÊN PHẦN TRAIN của fold — có dùng nhãn nhưng nằm trong CV
+    nên không rò rỉ. Hoà theo chỉ số cột (ổn định); gen hằng (F = NaN) xếp cuối. Trả về chỉ số đã sắp xếp tăng dần."""
+    from sklearn.feature_selection import f_classif
+    if p0 is None or p0 >= X_train.shape[1]:
+        return np.arange(X_train.shape[1])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        f, _ = f_classif(X_train, y_train)
+    f = np.nan_to_num(f, nan=-np.inf)
+    order = np.lexsort((np.arange(len(f)), -f))
+    return np.sort(order[:p0])
+
+
+PREFILTER_RULES = ("variance", "ftest")
+
+
+def prefilter(X_train: np.ndarray, y_train: np.ndarray, p0: int, rule: str = "variance") -> np.ndarray:
+    """Lọc sơ bộ trong fold: "variance" (mặc định, không dùng nhãn, M14) hoặc "ftest" (độ nhạy QĐ53b)."""
+    if rule == "variance":
+        return variance_prefilter(X_train, p0)
+    if rule == "ftest":
+        return ftest_prefilter(X_train, y_train, p0)
+    raise ValueError(f"prefilter rule không hợp lệ: {rule}")
+
+
 # ---------------------------------------------------------------------------------------------------
 # Lấy mẫu con độc lập (E4) và bản sao tương quan (E5a)
 # ---------------------------------------------------------------------------------------------------

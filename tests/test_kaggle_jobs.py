@@ -231,11 +231,11 @@ def test_rq2_early_job_uses_script_defaults_and_needs_no_restore():
 
 def test_rq2_notebook_clones_rq2_branch_and_survey_notebooks_stay_on_survey_branch():
     """Code MVP ở nhánh rq2-mvp của repo cá nhân; notebook survey phải giữ repo và nhánh cũ để tái lập số liệu đã chốt."""
-    for name in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb"):
+    for name in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb", "kaggle_rq1_sensitivity_b.ipynb"):
         rq2 = _config_source(REPO / "notebooks" / "kaggle" / name)
         assert "REPO_BRANCH = 'rq2-mvp'" in rq2 and "REPO_URL = 'https://github.com/datachain-uit/CN-23520899-LuanNT.git'" in rq2
     for exp in mk.EXPERIMENTS:
-        if exp.file not in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb"):
+        if exp.file not in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb", "kaggle_rq1_sensitivity_b.ipynb"):
             other = _config_source(REPO / "notebooks" / "kaggle" / exp.file)
             assert "REPO_BRANCH = 'survey-v2-code'" in other and "REPO_URL = 'https://github.com/datachain-uit/RNA-Seq-FS-Survey.git'" in other, exp.file
     assert "REPO_BRANCH = 'survey-v2-code'" in _config_source(REPO / "notebooks" / "kaggle_survey_v3_runner.ipynb")

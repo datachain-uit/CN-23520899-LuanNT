@@ -164,6 +164,18 @@ EXPERIMENTS = [
         "**Chỉ chạy sau khi GVHD xác nhận KBTN v2.4.** Một phiên, khôi phục đúng thứ tự `e7` rồi `panels` (E1b mới nhất nằm trong `panels`). Push nhánh và ghim "
         "`REPO_COMMIT` trước khi chạy.",
         repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git", pip_pins=True),
+    Experiment(
+        "kaggle_rq1_sensitivity_b.ipynb", "Bài 2 — độ nhạy RQ1 phần (b): BAS → LUSC, lọc F-test 2.000 gen (QĐ53b)",
+        "BAS → LUSC: E1 trên biến thể `gse30219_bas` (GSE30219 R5 + 39 mẫu BAS gộp vào LUSC; 81/99 sau QC; bản chia 5×5 mới seed 42–46) "
+        "cho L1-LR (8 mức k), IHC-4, B0, random-k → `E1_feature_selection_bas/`, `E1_classification_bas/`.\n"
+        "F-test 2.000: L1-LR trên 3 cohort GPL570 với lọc F-test 2.000 gen trong phần train của từng fold → `E1_feature_selection_ftest2000/`, "
+        "`E1_classification_ftest2000/` (B0 dùng lại `E1_classification` chính).\n"
+        "Nghiệm thu: `JOB_OK`; config.json traceable. Bảng độ nhạy 5 dòng sinh ở máy cá nhân bằng `scripts/make_rq1_sensitivity.py`.",
+        ["rq1_sens_b"],
+        "Một phiên, không cần khôi phục output. Kaggle Input **experiment-data-v3** phải là bản có thư mục "
+        "`experiment-data-geo-target/gse30219_bas/` (expression.h5, metadata.csv, repeated_splits.csv, excluded_samples_gse30219_bas.csv). "
+        "Push nhánh và ghim `REPO_COMMIT` trước khi chạy.",
+        repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
 ]
 
 JOB_LINE_PREFIX = "JOB = "

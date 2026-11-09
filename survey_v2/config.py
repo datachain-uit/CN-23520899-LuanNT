@@ -33,6 +33,9 @@ DATASET_DIRS = {
     "gse42127": f"{GEO_TARGET_DIR}/gse42127",
 }
 DATASET_DIR_ALTERNATIVES = {"gse30219": (f"{GEO_TARGET_DIR}/gse30219_r5_fixed",)}
+# Biến thể chỉ dùng cho độ nhạy (KHÔNG thuộc DATASETS, nên không vào vòng lặp nào của survey hay kaggle_jobs mặc định).
+# gse30219_bas (QĐ53b, Review 08/11 Mục 8.5): GSE30219 R5 + 39 mẫu histology BAS gộp vào LUSC; scripts/build_gse30219_bas.py.
+VARIANT_DATASET_DIRS = {"gse30219_bas": f"{GEO_TARGET_DIR}/gse30219_bas"}
 # Số mẫu kỳ vọng (LUAD/LUSC) sau QC mẫu QĐ21 + QĐ22 + QĐ22b (29/10/2026). load_dataset() ghi vào notes và DỪNG khi
 # KLTN_STRICT_N=1 (runner Kaggle đặt biến này) nếu lệch. Mẫu bị cách ly: <bộ>/excluded_samples_<bộ>.csv; n trước -> sau:
 #   TCGA 1018 (517/501) -> 1016: 2 mẫu ghi nữ, gen Y mức nam (opposite, bỏ phiếu từng gen Y; QĐ22b)
@@ -46,9 +49,10 @@ DATASET_EXPECTED_N = {
     "gse30219": (81, 60),
     "gse37745": (104, 65),
     "gse42127": (126, 41),
+    "gse30219_bas": (81, 99),       # biến thể: 185 (85/61 + 39 BAS) -> 180; QC trên cả biến thể chỉ loại lại đúng 5 mẫu R5
 }
 DATASET_PLATFORM = {"tcga_luad_lusc_primary_tumor": "RNA-seq (log2 TPM+1)", "gse10245": "GPL570", "gse30219": "GPL570",
-                    "gse37745": "GPL570", "gse42127": "GPL6884"}
+                    "gse37745": "GPL570", "gse42127": "GPL6884", "gse30219_bas": "GPL570"}
 # Tên giữ cho runner/test của đội code (commit 3059ce5, 2508a2a): cùng nội dung với DATASETS/DATASET_DIRS.
 V3_EXPERIMENT_DATASETS = tuple(DATASETS)
 V3_DATASET_DIRS = {name: tuple(path.split("/")) for name, path in DATASET_DIRS.items()}
@@ -68,7 +72,7 @@ SPLITS_DIR = "splits"                                       # $KLTN_DATA_ROOT/sp
 
 def dataset_dir(name: str) -> str:
     """Đường dẫn tương đối (so với KLTN_DATA_ROOT) của một bộ; bộ không có trong registry -> perm/<name>."""
-    return DATASET_DIRS.get(name, f"{PERM_DATA_DIR}/{name}")
+    return DATASET_DIRS.get(name) or VARIANT_DATASET_DIRS.get(name) or f"{PERM_DATA_DIR}/{name}"
 
 
 def dataset_dir_candidates(name: str) -> tuple[str, ...]:
@@ -81,6 +85,7 @@ def dataset_dir_candidates(name: str) -> tuple[str, ...]:
 # để panel pha A trên TCGA chạy trước 29/10 có thể đối chiếu bằng kiểm tra bằng nhau (QĐ19). Bộ ngoài registry
 # (bộ sanity, dữ liệu tổng hợp) dùng 99.
 DATASET_SEED_IDS = {name: 100 + i for i, name in enumerate(DATASETS)}
+DATASET_SEED_IDS["gse30219_bas"] = 200          # biến thể độ nhạy: mã riêng, không dùng lại seed của gse30219 (bản chia cũng mới)
 UNREGISTERED_COHORT_ID = 99
 
 

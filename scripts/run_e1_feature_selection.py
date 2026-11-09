@@ -27,7 +27,7 @@ from threadpoolctl import threadpool_limits
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from survey_v2 import config as C  # noqa: E402
-from survey_v2.data import drop_genes, load_dataset, sha256, variance_prefilter  # noqa: E402
+from survey_v2.data import PREFILTER_RULES, drop_genes, load_dataset, prefilter, sha256  # noqa: E402
 from survey_v2.e1_splits import validate_repeated_split_manifest  # noqa: E402
 from survey_v2.methods import select  # noqa: E402
 from survey_v2.panels import all_fixed_panels, panel_indices  # noqa: E402
@@ -45,6 +45,8 @@ def parse_args(argv=None):
     ap.add_argument("--k", nargs="+", type=int, default=list(C.K_GRID))
     ap.add_argument("--repeats", nargs="+", type=int, default=list(range(len(C.REPEAT_SEEDS))))
     ap.add_argument("--prefilter", type=int, default=C.PREFILTER_P0)
+    ap.add_argument("--prefilter-rule", choices=PREFILTER_RULES, default="variance",
+                    help="variance (mặc định, không dùng nhãn, M14) hoặc ftest (độ nhạy RQ1 QĐ53b: F-test trên train của fold)")
     ap.add_argument("--splits-root", type=Path, default=None,
                     help="root containing <cohort>/repeated_splits.csv; defaults to the cohort data directory")
     ap.add_argument("--out", default="E1_feature_selection")
@@ -162,7 +164,7 @@ def main(argv=None, script=__file__):
             if run.repeat not in args.repeats:
                 continue
             tr, _ = split_indices(ds, manifest, run.repeat, run.fold)
-            pre = variance_prefilter(ds.X[tr], args.prefilter)
+            pre = prefilter(ds.X[tr], ds.y[tr], args.prefilter, args.prefilter_rule)
             for method in args.methods:
                 metrics_path, genes_path = checkpoint_paths(out, int(run.repeat), int(run.fold), method)
                 if metrics_path.is_file() and genes_path.is_file():
@@ -243,7 +245,7 @@ def main(argv=None, script=__file__):
                "precomputed patient-grouped repeated 5x5 outer train/test; selection and label-free variance prefilter use outer train only",
                "split_file": str(path), "split_sha256": sha256(path), "methods": args.methods, "methods_skipped": sorted(skipped),
                "fixed_panels": {m: FIXED_PANELS[m] for m in args.methods if m in FIXED_PANELS}, "k_grid": args.k,
-               "prefilter_p0": args.prefilter, "gene_space": ds.notes, "n_samples": ds.n, "n_genes": ds.p,
+               "prefilter_p0": args.prefilter, "prefilter_rule": args.prefilter_rule, "gene_space": ds.notes, "n_samples": ds.n, "n_genes": ds.p,
                "metrics": ["n_selected", "exact_k", "n_filled", "selection_time_s (descriptive, not E2)", "cpu_time_s", "rss_delta_mb (descriptive)",
                            "emissions_kg_co2 (optional estimate)", "n_eval", "best_fitness", "pairwise_jaccard (descriptive; E4 is the CI version)"],
                "methods_in_results": sorted(run_df.method.unique()) if len(run_df) else [],

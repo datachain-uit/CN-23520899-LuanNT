@@ -36,6 +36,7 @@ Bài 2 (Review 03/11/2026, QĐ37): việc `rq2_early` là thử nghiệm sớm P
 Review 07/11/2026: việc `rq2_mvp` chạy RQ2 trên 4 cohort; `gates` là các lệnh chạy trong bước verify, thoát khác 0 thì việc không đạt (QĐ51: cổng bằng nhau).
 Review 08/11/2026 (QĐ70): `pin_versions` — trước khi chạy, numpy, pandas, scipy, scikit-learn của phiên phải trùng trường
 versions trong config.json của E1b, E7 đã khôi phục; lệch thì dừng mã 2 và in lệnh pip install == cần chạy.
+Review 08/11/2026 (QĐ53b, Mục 8.5): việc `rq1_sens_b` cho độ nhạy RQ1 phần (b); không cần khôi phục output nào.
 """
 
 from __future__ import annotations
@@ -59,6 +60,8 @@ TCGA = C.SOURCE_DATASET
 GEO = tuple(C.FEWSHOT_COHORTS)
 GPL570 = tuple(C.WRAPPER_DATASETS)
 IHC_GENES = ("NKX2-1", "TP63", "NAPSA", "KRT5")
+RQ1_BAS_DATASET = "gse30219_bas"       # biến thể độ nhạy (scripts/build_gse30219_bas.py), không thuộc C.DATASETS
+RQ1_FTEST_P0 = 2000
 
 
 def _published_panel_methods() -> list[str]:
@@ -245,6 +248,20 @@ def build_jobs() -> dict[str, Job]:
                  requires_cfg=[(f"E1b/{d}/config.json", "methods_in_results", m) for d in GEO for m in ("l1_lr", "ihc_2", "ihc_4")],
                  restore_from=["e7", "panels"], gates=[["scripts/check_rq2_equality.py"]],
                  pin_versions=[f"E1b/{d}/config.json" for d in GEO] + [f"E7/{d}/config.json" for d in GEO], parallel=1, hours="2–3"))
+    # ----------------------------------------------------------------- Độ nhạy RQ1 phần (b) (QĐ53b, Review 08/11 Mục 8.5)
+    bas = RQ1_BAS_DATASET
+    J.append(Job("rq1_sens_b", "S · 13/11", "Độ nhạy RQ1 (b): BAS → LUSC (gse30219_bas: L1-LR 8 mức k, IHC-4; B0, random-k) và lọc F-test 2.000 gen "
+                 "trong fold (L1-LR, 3 cohort GPL570; B0 dùng lại E1_classification chính). Cần experiment-data-v3 có thư mục gse30219_bas",
+                 [_fs("--datasets", bas, "--methods", "l1_lr", "ihc_4", "--out", "E1_feature_selection_bas")]
+                 + [_fs("--datasets", d, "--methods", "l1_lr", "--prefilter", str(RQ1_FTEST_P0), "--prefilter-rule", "ftest",
+                        "--out", "E1_feature_selection_ftest2000") for d in GPL570],
+                 [f"E1_feature_selection_bas/{bas}", f"E1_classification_bas/{bas}"]
+                 + [f"E1_feature_selection_ftest2000/{d}" for d in GPL570] + [f"E1_classification_ftest2000/{d}" for d in GPL570],
+                 finalize=[_clf("--datasets", bas, "--selection-roots", "{RESULTS}/E1_feature_selection_bas", "--methods", "l1_lr", "ihc_4",
+                                "--out", "E1_classification_bas")]
+                 + [_clf("--datasets", d, "--selection-roots", "{RESULTS}/E1_feature_selection_ftest2000", "--methods", "l1_lr",
+                         "--no-references", "--out", "E1_classification_ftest2000") for d in GPL570],
+                 parallel=4, hours="~1"))
     return {j.name: j for j in J}
 
 
