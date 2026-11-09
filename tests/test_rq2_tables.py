@@ -289,3 +289,92 @@ def test_pilot_zip_point_estimates_match_per_run():
         b = per[(per.gamma_rule == "fixed") & (per.gamma == 0) & (per.n_t == n_t) & per.k.isin([2, 4, 5])].set_index(["split", "subset", "k"]).auroc
         assert cell["delta"] == pytest.approx((a - b).groupby(level=["split", "subset"]).mean().mean(), abs=1e-12)
         assert cell["n_runs"] == 20 and np.isfinite(cell["se"]) and cell["se"] > 0
+
+
+# --------------------------------------------------------------------------------------------- baseline R (ptLasso, Trans-GLM; mô tả)
+def r_synthetic(cohort="gse30219", n_splits=2, n_subsets=2, n_ts=("5", "10"), ks=(2, 3, 4, 5), n_pos=6, n_neg=5, seed=50):
+    """rq2_r_per_run.csv, rq2_r_scores.csv, rq2_r_diagnostics.csv như run_rq2_r_eval.py, cùng test_T với synthetic(cohort, n_pos, n_neg)."""
+    rng = np.random.default_rng(seed)
+    per, sc, diag = [], [], []
+    for split in range(n_splits):
+        test_ids = [f"{cohort}_s{split}_p{i}" for i in range(n_pos)] + [f"{cohort}_s{split}_n{i}" for i in range(n_neg)]
+        y = np.array([1] * n_pos + [0] * n_neg)
+        for subset in range(n_subsets):
+            for n_t in n_ts:
+                base = {"cohort": cohort, "split": split, "seed": 42 + split, "subset": subset, "n_t": n_t}
+                for method in ("ptlasso", "transglm"):
+                    for k in ks:
+                        s = np.round(rng.normal(size=len(y)) + 0.6 * y, 1)
+                        per.append({**base, "k": k, "method": method, "gamma": np.nan, "gamma_rule": "none", "prefilter_space": "source",
+                                    "auroc": float(roc_auc_score(y, s)), "bacc": 0.5, "mcc": 0.0, "logloss": 0.7, "brier": 0.25})
+                        sc.extend({**base, "k": k, "method": method, "gamma": np.nan, "prefilter_space": "source", "sample_id": sid,
+                                   "y_true": int(t), "score": float(v)} for sid, t, v in zip(test_ids, y, s))
+                        d = {**base, "method": method, "k": k}
+                        if method == "ptlasso":
+                            d.update(alpha=0.5, same_as_stage1_topk=float((split + subset + k) % 3 == 0), size_S1=28)
+                        diag.append(d)
+    return pd.DataFrame(per), pd.DataFrame(sc), pd.DataFrame(diag)
+
+
+def test_r_baselines_are_descriptive_and_leave_h2_h2b_h2c_unchanged():
+    data = _inputs()
+    base = m.build(data, n_boot=40)
+    r = {c: r_synthetic(cohort=c, n_ts=("5", "10") if c == "gse10245" else ("5", "10", "20", "40"), seed=60 + i) for i, c in enumerate(data)}
+    full = m.build(data, n_boot=40, r_data=r)
+    for name in ("cells", "pooled", "h2b", "decisions"):
+        old = base[name]
+        new = full[name]
+        if name in ("cells", "pooled"):
+            new = new[~new.comparison.isin(m.R_ARMS)].reset_index(drop=True)
+            old = old[[c for c in old.columns]].reset_index(drop=True)
+            new = new[old.columns]
+        pd.testing.assert_frame_equal(old.reset_index(drop=True), new.reset_index(drop=True))
+    b = full["baselines"]
+    assert set(b.comparison) == set(m.R_ARMS) and set(b.n_t) == {"5", "10", "20", "40"} and b.p_holm.isna().all()
+    assert (b.family == m.R_FAMILY).all() and {"ci95_ivw_low", "ci95_ivw_high", "ci95_eq_low", "ci95_eq_high"} <= set(b.columns)
+    row = b.iloc[0]
+    assert row.ci95_ivw_low == pytest.approx(row.delta_ivw - 1.959963984540054 * row.se_ivw)
+
+
+def test_r_comparison_pairs_on_the_same_test_set_as_mvp():
+    per, sc = synthetic(arms=())
+    rp, rs, _ = r_synthetic()
+    runs = m.collect_runs(pd.concat([per, rp]), pd.concat([sc, rs]), "gse30219", "5", "mvp", "ptlasso", (2, 3, 5))
+    a = rp[(rp.method == "ptlasso") & (rp.n_t == "5") & rp.k.isin([2, 3, 5])].set_index(["split", "subset", "k"]).auroc
+    assert runs[0].auroc_b == {k: pytest.approx(a.loc[(runs[0].split, runs[0].subset, k)]) for k in (2, 3, 5)}
+    bad = rs.copy()
+    bad.loc[bad.split == 0, "sample_id"] = bad.loc[bad.split == 0, "sample_id"] + "_x"
+    with pytest.raises(ValueError, match="test_T"):
+        m.collect_runs(pd.concat([per, rp]), pd.concat([sc, bad]), "gse30219", "5", "mvp", "ptlasso", (2,))
+
+
+def test_degeneracy_table_by_cohort_n_t_k_and_tuning_budget():
+    _, _, diag = r_synthetic()
+    t = m.degeneracy_table({"gse30219": diag})
+    assert set(t.columns) >= {"cohort", "n_t", "k", "n_runs", "same_as_stage1_topk_rate"} and len(t) == 2 * 4
+    row = t[(t.n_t == "5") & (t.k == 3)].iloc[0]
+    sub = diag[(diag.method == "ptlasso") & (diag.n_t == "5") & (diag.k == 3)]
+    assert row.n_runs == 4 and row.same_as_stage1_topk_rate == pytest.approx(sub.same_as_stage1_topk.mean())
+    budget = m.tuning_budget()
+    assert set(budget.method) == {"mvp_m5_pos", "target_only", "select_on_source", "pooled", "ihc", "ptlasso", "transglm"}
+    assert {"tuned_on_L_T", "selection_stage", "classifier_stage"} <= set(budget.columns)
+
+
+def test_load_r_inputs_from_zip_matches_directory(tmp_path):
+    rp, rs, rd = r_synthetic()
+    root = tmp_path / "RQ2_r" / "gse30219"
+    root.mkdir(parents=True)
+    rp.to_csv(root / "rq2_r_per_run.csv", index=False); rs.to_csv(root / "rq2_r_scores.csv", index=False); rd.to_csv(root / "rq2_r_diagnostics.csv", index=False)
+    z = tmp_path / "rq2_r_all_x_results.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        for f in root.glob("*.csv"):
+            zf.write(f, "rq2_r/results_survey_v2/RQ2_r/gse30219/" + f.name)
+    a, b = m.load_r_inputs(tmp_path / "RQ2_r", ["gse30219"]), m.load_r_inputs(z, ["gse30219"])
+    for x, y in zip(a["gse30219"], b["gse30219"]):
+        pd.testing.assert_frame_equal(x, y)
+    assert a["gse30219"][0].n_t.map(type).eq(str).all()
+
+
+def test_cli_accepts_r_input_option():
+    args = m.parse_args(["--input", "a.zip", "--r-input", "b.zip"])
+    assert str(args.r_input) == "b.zip" and m.parse_args([]).r_input is None

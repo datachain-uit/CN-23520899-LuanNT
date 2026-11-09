@@ -21,6 +21,10 @@ H2c: MVP so với select-on-source, pooled, H0: Δ ≤ −0,01, Holm trên 6 ki�
     python scripts/make_rq2_tables.py                      # đọc $KLTN_DATA_ROOT/results/survey_v2/RQ2_mvp
 
 Đầu ra: results/survey_v2/RQ2_tables/{rq2_cells.csv, rq2_pooled.csv, rq2_h2b.csv, rq2_decisions.csv, config.json}.
+Với --r-input (zip của notebook kaggle_rq2_r_run, STAGE = all): thêm so sánh MVP với ptLasso, Trans-GLM (QĐ68) theo cùng bootstrap hai tầng,
+ghép cặp trên cùng test_T. KBTN không đăng ký giả thuyết cho hai so sánh này nên chỉ MÔ TẢ (Δ, SE, CI 95 % hai phía, gộp IVW và trọng số
+bằng nhau; không Holm); thêm rq2_baselines.csv, rq2_ptlasso_degeneracy.csv (tỉ lệ same_as_stage1_topk theo cohort, n_T, k) và
+rq2_tuning_budget.csv (PD-05). Các bảng H2, H2b, H2c không đổi khi thêm --r-input.
 Cổng bằng nhau (rq2_equality_report.csv) thiếu hoặc có dòng không ok thì dừng, không tính gì (QĐ70).
 """
 
@@ -60,6 +64,11 @@ ALPHA = 0.05
 Z95 = float(norm.ppf(0.95))
 AUROC_TOL = 1e-9                                   # AUROC tính lại từ điểm phải trùng per_run
 POOL_SETS = {"gpl570": tuple(C.GPL570_COHORTS)}    # "all4" = mọi cohort đã nạp (độ nhạy)
+# Baseline R (QĐ68): KBTN không đăng ký giả thuyết cho MVP so với ptLasso, Trans-GLM -> chỉ mô tả: Δ, SE, CI 95 % hai phía, gộp IVW và
+# trọng số bằng nhau; không Holm, không kết luận. Cùng bootstrap hai tầng và ghép cặp trên cùng test_T như H2.
+R_ARMS = ("ptlasso", "transglm")
+R_FAMILY = "mô tả (không đăng ký giả thuyết; không Holm)"
+Z975 = float(norm.ppf(0.975))
 RUN = ["split", "subset"]
 
 
@@ -68,8 +77,63 @@ def parse_args(argv=None):
     ap.add_argument("--input", type=Path, default=None, help="zip của JOB rq2_mvp hoặc thư mục RQ2_mvp (mặc định $KLTN_DATA_ROOT/results/survey_v2/RQ2_mvp)")
     ap.add_argument("--cohorts", nargs="+", default=list(C.FEWSHOT_COHORTS))
     ap.add_argument("--n-boot", type=int, default=C.BOOTSTRAP_N)
+    ap.add_argument("--r-input", type=Path, default=None, help="zip của notebook kaggle_rq2_r_run (STAGE = all) hoặc thư mục RQ2_r: thêm so sánh mô tả với ptLasso, Trans-GLM")
     ap.add_argument("--out", default="RQ2_tables")
     return ap.parse_args(argv)
+
+
+def load_r_inputs(src: Path, cohorts) -> dict:
+    """{cohort: (rq2_r_per_run, rq2_r_scores, rq2_r_diagnostics)} từ zip của kaggle_rq2_r_run hoặc thư mục RQ2_r."""
+    src = Path(src)
+    names = ("rq2_r_per_run.csv", "rq2_r_scores.csv", "rq2_r_diagnostics.csv")
+    out = {}
+    if src.suffix == ".zip":
+        with zipfile.ZipFile(src) as zf:
+            members = zf.namelist()
+            for c in cohorts:
+                frames = []
+                for name in names:
+                    hits = [n for n in members if n.endswith(f"RQ2_r/{c}/{name}")]
+                    if len(hits) != 1:
+                        raise ValueError(f"{src}: cần đúng một RQ2_r/{c}/{name}, thấy {len(hits)}")
+                    frames.append(_read(io.BytesIO(zf.read(hits[0]))))
+                out[c] = tuple(frames)
+        return out
+    for c in cohorts:
+        out[c] = tuple(_read(src / c / name) for name in names)
+    return out
+
+
+def degeneracy_table(diags: dict) -> pd.DataFrame:
+    """Tỉ lệ same_as_stage1_topk của ptLasso theo (cohort, n_T, k) (QĐ68: báo trong chú thích bảng RQ2)."""
+    rows = []
+    for cohort, d in diags.items():
+        pt = d[d.method == "ptlasso"].copy()
+        pt["n_t"] = pt.n_t.astype(str)
+        for (n_t, k), g in pt.groupby(["n_t", "k"]):
+            v = pd.to_numeric(g.same_as_stage1_topk, errors="coerce")
+            rows.append({"cohort": cohort, "n_t": n_t, "k": int(k), "n_runs": int(len(g)), "n_defined": int(v.notna().sum()),
+                         "same_as_stage1_topk_rate": float(v.mean()) if v.notna().any() else np.nan,
+                         "alpha_mode": float(g.alpha.mode().iloc[0]) if "alpha" in g and g.alpha.notna().any() else np.nan})
+    t = pd.DataFrame(rows)
+    return t.sort_values(["cohort", "n_t", "k"], key=lambda s: s.map(_n_t_key) if s.name == "n_t" else s).reset_index(drop=True) if len(t) else t
+
+
+def tuning_budget() -> pd.DataFrame:
+    """Bảng ngân sách tuning (PD-05, QĐ68): phần nào được chỉnh trên L_T. Bước phân loại giống nhau ở mọi nhánh (evaluate_panel, M5)."""
+    clf = "LR-L2 (evaluate_panel, M5): n_T ≤ 10 C = 1, ngưỡng 0,5; n_T ≥ 20 C ∈ {0,01; 0,1; 1; 10} bằng CV 3 fold trong L_T"
+    rows = [
+        ("mvp_m5_pos", True, "γ ∈ {0,5; 1; 2} (3 ứng viên) chọn bằng log-loss OOF trong L_T (CV 5 fold; lặp 3 lần khi n_T ≥ 20), biên 0,01; L1 đúng k bằng dò C; "
+                             "π_j từ stability selection trên nguồn (một lần)"),
+        ("target_only", False, "Không có tham số chỉnh: L1 đúng k bằng dò C trên L_T (lọc phương sai trên L_T)"),
+        ("select_on_source", False, "Không chỉnh trên L_T: panel chọn trên nguồn (L1 đúng k)"),
+        ("pooled", False, "Không chỉnh trên L_T: L1 đúng k trên nguồn + L_T gộp"),
+        ("ihc", False, "Panel cố định (IHC-2, IHC-4)"),
+        ("ptlasso", True, "α ∈ {0,75; 0,5; 0,25} (3 ứng viên) bằng deviance CV trong L_T (fold của MVP), biên 0,01; λ2 = lambda.min trên đường λ tự sinh của "
+                          "cv.glmnet; λ1 = lambda.1se cố định trên nguồn (CV 10 fold, một lần)"),
+        ("transglm", True, "Theo mặc định của glmtrans: CV nội bộ chọn λ, phát hiện nguồn có hại (transfer.source.id = auto); không chỉnh thêm"),
+    ]
+    return pd.DataFrame([{"method": m_, "tuned_on_L_T": t_, "selection_stage": s_, "classifier_stage": clf} for m_, t_, s_ in rows])
 
 
 # ------------------------------------------------------------------------------------------------- đọc dữ liệu
@@ -253,7 +317,8 @@ def pool(cells: pd.DataFrame, margin: float) -> dict:
     q = float((w * (d - d_ivw) ** 2).sum())
     out = {"n_cohorts": int(len(d)), "delta_ivw": d_ivw, "se_ivw": se_ivw, "lower_ivw": d_ivw - Z95 * se_ivw,
            "p_ivw": float(norm.sf((d_ivw + margin) / se_ivw)), "delta_eq": d_eq, "se_eq": se_eq, "lower_eq": d_eq - Z95 * se_eq,
-           "p_eq": float(norm.sf((d_eq + margin) / se_eq)), "q": q, "i2": max(0.0, (q - (len(d) - 1)) / q) if q > 0 else 0.0, "margin": margin}
+           "p_eq": float(norm.sf((d_eq + margin) / se_eq)), "q": q, "i2": max(0.0, (q - (len(d) - 1)) / q) if q > 0 else 0.0, "margin": margin,
+           "ci95_ivw_low": d_ivw - Z975 * se_ivw, "ci95_ivw_high": d_ivw + Z975 * se_ivw, "ci95_eq_low": d_eq - Z975 * se_eq, "ci95_eq_high": d_eq + Z975 * se_eq}
     for c, wi in zip(cells.cohort, w / w.sum()):
         out[f"w_{c}"] = float(wi)
     return out
@@ -285,16 +350,24 @@ def _n_t_key(v: str) -> int:
     return 10**9 if v == "pool" else int(v)
 
 
-def build(data: dict, n_boot: int, mvp_rule: str = MVP_RULE) -> dict:
-    """data = {cohort: (per_run, scores)}. Trả {"cells", "pooled", "h2b", "decisions"}."""
+def build(data: dict, n_boot: int, mvp_rule: str = MVP_RULE, r_data: dict | None = None) -> dict:
+    """data = {cohort: (per_run, scores)}; r_data = {cohort: (per_run, scores, diagnostics)} của baseline R (tuỳ chọn).
+    Trả {"cells", "pooled", "h2b", "decisions"} và, khi có r_data, {"baselines", "degeneracy", "tuning_budget"}."""
     specs = []                                                     # (comparison, ks, margin, mức n_T được phép)
     specs.append(("target_only", K_AVG, 0.0, None))
     specs += [(arm, K_AVG, MARGIN_H2C, D3_N_T) for arm in H2C_ARMS]
     specs += [(arm, ks, MARGIN_H2B, H2B_N_T) for arm, ks in H2B.items()]
+    if r_data:
+        specs += [(arm, K_AVG, 0.0, None) for arm in R_ARMS]
     cells = []
     for cohort, (per, sc) in data.items():
+        if r_data and cohort in r_data:
+            rp, rs, _ = r_data[cohort]
+            per, sc = pd.concat([per, rp], ignore_index=True), pd.concat([sc, rs], ignore_index=True)
         levels = sorted(per.n_t.astype(str).unique(), key=_n_t_key)
         for comp, ks, margin, allowed in specs:
+            if comp in R_ARMS and not (r_data and cohort in r_data):
+                continue
             for n_t in levels if allowed is None else [v for v in levels if v in allowed]:
                 runs = collect_runs(per, sc, cohort, n_t, "mvp", comp, ks, mvp_rule)
                 seed = cell_seed(cohort, n_t, comp, *ks)
@@ -332,7 +405,13 @@ def build(data: dict, n_boot: int, mvp_rule: str = MVP_RULE) -> dict:
                                               for r, p in zip(h2c.itertuples(), p_holm))})
     h2b = pooled[pooled.comparison.isin(H2B)].copy()
     h2b["noninferior_both"] = (h2b.lower_ivw > -MARGIN_H2B) & (h2b.lower_eq > -MARGIN_H2B)
-    return {"cells": cells, "pooled": pooled, "h2b": h2b, "decisions": pd.DataFrame(decisions)}
+    out = {"cells": cells, "pooled": pooled, "h2b": h2b, "decisions": pd.DataFrame(decisions)}
+    if r_data:
+        base = pooled[pooled.comparison.isin(R_ARMS)].copy()
+        base.insert(3, "family", R_FAMILY)
+        out.update({"baselines": base.reset_index(drop=True), "degeneracy": degeneracy_table({c: d[2] for c, d in r_data.items()}),
+                    "tuning_budget": tuning_budget()})
+    return out
 
 
 # ------------------------------------------------------------------------------------------------- CLI
@@ -345,18 +424,26 @@ def main(argv=None, script=__file__) -> int:
     n_gate = check_gate(report)
     opened = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"cổng bằng nhau: {n_gate} dòng ok; mở kết quả lúc {opened}", flush=True)
-    tables = build(data, args.n_boot)
+    r_data = load_r_inputs(args.r_input, args.cohorts) if args.r_input else None
+    tables = build(data, args.n_boot, r_data=r_data)
     out = results_dir(args.out)
-    for name, frame in (("rq2_cells", tables["cells"]), ("rq2_pooled", tables["pooled"]), ("rq2_h2b", tables["h2b"]), ("rq2_decisions", tables["decisions"])):
-        frame.to_csv(out / f"{name}.csv", index=False, encoding="utf-8-sig")
+    names = [("rq2_cells", "cells"), ("rq2_pooled", "pooled"), ("rq2_h2b", "h2b"), ("rq2_decisions", "decisions")]
+    if r_data:
+        names += [("rq2_baselines", "baselines"), ("rq2_ptlasso_degeneracy", "degeneracy"), ("rq2_tuning_budget", "tuning_budget")]
+    for name, key in names:
+        tables[key].to_csv(out / f"{name}.csv", index=False, encoding="utf-8-sig")
     cfg = {"experiment": "RQ2_tables", "input": str(src), "input_sha256": sha256(src) if Path(src).suffix == ".zip" else None,
            "cohorts": args.cohorts, "pool_sets": {**POOL_SETS, "all4": list(args.cohorts)}, "mvp_rule": MVP_RULE, "k_avg": list(K_AVG),
            "h2_family_n_t": list(H2_N_T), "h2b": {k: list(v) for k, v in H2B.items()}, "h2b_n_t": list(H2B_N_T), "h2c_arms": list(H2C_ARMS),
            "margin_h2b": MARGIN_H2B, "margin_h2c": MARGIN_H2C, "alpha": ALPHA, "n_boot": args.n_boot,
            "bootstrap": "tầng 1: lần chạy (split, subset); tầng 2: bệnh nhân test_T phân tầng theo lớp, một lần mỗi split mỗi vòng (QĐ69a)",
            "seed_rule": "CRC32('rq2|cohort|n_t|comparison|k...')", "equality_rows_ok": n_gate, "results_opened_at_utc": opened,
+           "r_input": str(args.r_input) if args.r_input else None,
+           "r_input_sha256": sha256(args.r_input) if args.r_input and Path(args.r_input).suffix == ".zip" else None,
+           "r_arms": list(R_ARMS) if r_data else [], "r_family": R_FAMILY if r_data else None,
            "elapsed_s": time.time() - t0, "versions": all_versions()}
-    write_config(out, prov, cfg, data_files=[src] if Path(src).suffix == ".zip" else ())
+    files = [p for p in (src, args.r_input) if p and Path(p).suffix == ".zip"]
+    write_config(out, prov, cfg, data_files=files)
     with pd.option_context("display.width", 220, "display.max_columns", None):
         print(tables["decisions"].to_string(index=False))
     print("ghi", out)
