@@ -42,6 +42,8 @@ def test_prefix_panels_are_nested():
 
 @pytest.mark.parametrize("method", ["f_test", "mutual_info", "mrmr", "relieff", "rf_importance", "svm_rfe", "l1_lr", "elastic_net"])
 def test_select_returns_exact_k_and_nested_for_rankers(toy, method):
+    if method == "relieff":
+        pytest.importorskip("skrebate")      # Y73: máy cá nhân không có skrebate; Kaggle cài skrebate==0.8.4 ở Gate 2 nên test vẫn chạy ở đó
     X, y = toy
     ks = [5, 10, 20]
     sel = select(method, X, y, ks, seed=1)
