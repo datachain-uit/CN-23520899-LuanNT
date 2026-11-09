@@ -35,6 +35,9 @@ from survey_v2.runlog import DATA_ROOT, all_versions, results_dir, start_run, wr
 
 ALPHAS = (0.75, 0.5, 0.25)
 ALPHA_MARGIN = 0.01
+# QĐ70: đánh giá phải cùng môi trường với MVP để AUROC so được theo cặp. Giá trị = trường versions của RQ2_mvp/*/config.json
+# (rq2_mvp_1b7c021_results.zip), trùng E1b, E7 (9b2d6a5, d870008). Lệch thì dừng mã 2 trước khi tính gì.
+REFERENCE_VERSIONS = {"numpy": "2.1.3", "pandas": "2.3.3", "scipy": "1.16.3", "scikit-learn": "1.6.1"}
 METHODS = ("ptlasso", "transglm")
 
 
@@ -183,8 +186,26 @@ def evaluate_cohort(ds, data: dict, k_list, save_scores: bool) -> tuple[list, li
     return rows, gene_rows, diag_rows, score_rows
 
 
+def version_mismatches(expected: dict = REFERENCE_VERSIONS, current: dict | None = None) -> dict:
+    """{gói: (phiên bản đang có, phiên bản tham chiếu)} cho các gói lệch; rỗng khi khớp."""
+    from importlib import metadata
+    if current is None:
+        current = {}
+        for p in expected:
+            try:
+                current[p] = metadata.version(p)
+            except metadata.PackageNotFoundError:
+                current[p] = None
+    return {p: (current.get(p), v) for p, v in expected.items() if current.get(p) != v}
+
+
 def main(argv=None, script=__file__) -> int:
     args = parse_args(argv)
+    bad = version_mismatches()
+    if bad:
+        print("PHIÊN BẢN THƯ VIỆN KHÁC rq2_mvp (QĐ70) — không đánh giá:\n  " + "\n  ".join(f"{p}: phiên {c}, tham chiếu {v}" for p, (c, v) in bad.items())
+              + "\ncài đúng phiên bản rồi chạy lại — notebook kaggle_rq2_r_run: dán vào ô cấu hình\n  PIP_PINS = " + repr({p: v for p, (_, v) in bad.items()}))
+        return 2
     prov = start_run(script, params={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()})
     stage1 = pd.read_csv(args.r_out / "stage1_summary.csv")
     session = args.r_out / "sessionInfo.txt"

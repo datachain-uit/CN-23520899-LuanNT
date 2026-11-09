@@ -217,3 +217,21 @@ def test_kaggle_r_notebook_runs_stage1_first_and_calls_the_three_scripts():
         assert s in code
     assert "if STAGE == 'all' and r_status == 0" in code and "ignore_patterns('*.csv.gz')" in code
     assert code.index("make_archive") < code.index("raise RuntimeError('export_rq2_inputs.py lỗi")       # lưu zip trước khi báo lỗi
+
+
+def test_eval_stops_with_code_2_when_library_versions_differ_from_rq2_mvp(capsys):
+    ev = _mod("run_rq2_r_eval")
+    assert ev.REFERENCE_VERSIONS == {"numpy": "2.1.3", "pandas": "2.3.3", "scipy": "1.16.3", "scikit-learn": "1.6.1"}
+    assert ev.version_mismatches(current=dict(ev.REFERENCE_VERSIONS)) == {}
+    assert ev.version_mismatches(current={**ev.REFERENCE_VERSIONS, "scikit-learn": "1.7.0"}) == {"scikit-learn": ("1.7.0", "1.6.1")}
+    ev.version_mismatches = lambda *a, **k: {"numpy": ("2.2.0", "2.1.3")}
+    assert ev.main(["--inputs", "x", "--r-out", "y"]) == 2
+    assert "PIP_PINS = {'numpy': '2.1.3'}" in capsys.readouterr().out
+
+
+def test_kaggle_r_notebook_has_pip_pins_installed_before_imports():
+    import json
+    nb = json.loads((REPO / "notebooks" / "kaggle_r" / "kaggle_rq2_r_run.ipynb").read_text(encoding="utf-8"))
+    code = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    assert "PIP_PINS = {}" in code and code.index("if PIP_PINS:") < code.index("for mod in ('numpy'")
+    assert "eval_status == 2" in code
