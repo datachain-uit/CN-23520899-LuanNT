@@ -262,6 +262,13 @@ def build_jobs() -> dict[str, Job]:
                  + [_clf("--datasets", d, "--selection-roots", "{RESULTS}/E1_feature_selection_ftest2000", "--methods", "l1_lr",
                          "--no-references", "--out", "E1_classification_ftest2000") for d in GPL570],
                  parallel=4, hours="~1"))
+    # ----------------------------------------------------------------- RQ4 H4b + ablation RQ2 loại 4 gen IHC (Review 07/11 Bảng 8; 16–22/11)
+    mvp_grid = ["--datasets", *GEO, "--k", "2", "3", "4", "5", "10", "--gamma", "0", "0.5", "1", "2", "--arms", "mvp", "--save-scores", "--n-jobs", "2"]
+    J.append(Job("rq4_h4b_noihc", "R4 · 22/11", "H4b: MVP với π từ TCGA xáo nhãn (một hoán vị mỗi cohort) trên đúng các lần chạy của RQ2; "
+                 "ablation RQ2: MVP và target-only khi loại 4 gen IHC khỏi nguồn và đích. Chỉ nhánh mvp; không cần khôi phục output",
+                 [["scripts/run_rq2_mvp.py", *mvp_grid, "--shuffle-source-labels", "--out", "RQ2_mvp_shuffled"],
+                  ["scripts/run_rq2_mvp.py", *mvp_grid, "--exclude-genes", *IHC_GENES, "--out", "RQ2_mvp_noIHC"]],
+                 [f"RQ2_mvp_shuffled/{d}" for d in GEO] + [f"RQ2_mvp_noIHC/{d}" for d in GEO], parallel=2, hours="4–6"))
     return {j.name: j for j in J}
 
 

@@ -231,11 +231,11 @@ def test_rq2_early_job_uses_script_defaults_and_needs_no_restore():
 
 def test_rq2_notebook_clones_rq2_branch_and_survey_notebooks_stay_on_survey_branch():
     """Code MVP ở nhánh rq2-mvp của repo cá nhân; notebook survey phải giữ repo và nhánh cũ để tái lập số liệu đã chốt."""
-    for name in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb", "kaggle_rq1_sensitivity_b.ipynb"):
+    for name in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb", "kaggle_rq1_sensitivity_b.ipynb", "kaggle_rq4_h4b_noihc.ipynb"):
         rq2 = _config_source(REPO / "notebooks" / "kaggle" / name)
         assert "REPO_BRANCH = 'rq2-mvp'" in rq2 and "REPO_URL = 'https://github.com/datachain-uit/CN-23520899-LuanNT.git'" in rq2
     for exp in mk.EXPERIMENTS:
-        if exp.file not in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb", "kaggle_rq1_sensitivity_b.ipynb"):
+        if exp.file not in ("kaggle_rq2_early.ipynb", "kaggle_rq2_mvp.ipynb", "kaggle_rq1_sensitivity_b.ipynb", "kaggle_rq4_h4b_noihc.ipynb"):
             other = _config_source(REPO / "notebooks" / "kaggle" / exp.file)
             assert "REPO_BRANCH = 'survey-v2-code'" in other and "REPO_URL = 'https://github.com/datachain-uit/RNA-Seq-FS-Survey.git'" in other, exp.file
     assert "REPO_BRANCH = 'survey-v2-code'" in _config_source(REPO / "notebooks" / "kaggle_survey_v3_runner.ipynb")
@@ -364,3 +364,14 @@ def test_version_mismatch_prints_pip_pins_line_to_paste(tmp_path, monkeypatch, c
     _write_ref_configs(kj.results_root(), {"E1b/a/config.json": REF_VERSIONS})
     assert kj.cmd_run(job, None, tmp_path / "logs") == 2
     assert "PIP_PINS = {'numpy': '2.1.3', 'scipy': '1.16.3'}" in capsys.readouterr().out
+
+
+def test_rq4_h4b_noihc_job_runs_two_mvp_variants_on_the_rq2_grid():
+    job = kj.JOBS["rq4_h4b_noihc"]
+    parsed = [_load(REPO / s[0]).parse_args(s[1:]) for s in job.shards]
+    assert len(parsed) == 2 and all(a.arms == ["mvp"] and a.datasets == list(kj.GEO) and a.k == [2, 3, 4, 5, 10] for a in parsed)
+    assert all(a.gamma == [0.0, 0.5, 1.0, 2.0] and a.save_scores and a.gamma_rule == "cv" for a in parsed)
+    shuf, noihc = parsed
+    assert shuf.shuffle_source_labels and shuf.out == "RQ2_mvp_shuffled" and shuf.exclude_genes is None
+    assert noihc.exclude_genes == list(kj.IHC_GENES) and noihc.out == "RQ2_mvp_noIHC" and not noihc.shuffle_source_labels
+    assert job.restore_from == [] and job.requires == [] and job.parallel == 2

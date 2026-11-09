@@ -176,6 +176,16 @@ EXPERIMENTS = [
         "`experiment-data-geo-target/gse30219_bas/` (expression.h5, metadata.csv, repeated_splits.csv, excluded_samples_gse30219_bas.csv). "
         "Push nhánh và ghim `REPO_COMMIT` trước khi chạy.",
         repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
+    Experiment(
+        "kaggle_rq4_h4b_noihc.ipynb", "Bài 2 — RQ4 H4b (nguồn xáo nhãn) và ablation RQ2 loại 4 gen IHC",
+        "H4b: MVP (m5_pos) với π tính trên TCGA có nhãn bị xáo (một hoán vị cố định mỗi cohort, seed trong config) trên đúng các lần chạy few-shot "
+        "của RQ2 → `RQ2_mvp_shuffled/`; target-only trong cùng thư mục trùng lần chạy chính. Ablation: MVP và target-only khi loại "
+        "NKX2-1, TP63, NAPSA, KRT5 khỏi nguồn và đích → `RQ2_mvp_noIHC/`. Có điểm từng mẫu.\n"
+        "Nghiệm thu: `JOB_OK`; config.json traceable. Thống kê (H4b chỉ báo cáo, biên 0,01; ablation mô tả) sinh ở máy cá nhân bằng script đã commit.",
+        ["rq4_h4b_noihc"],
+        "Một phiên, hai tiến trình song song, không cần khôi phục output. Kaggle Input: **experiment-data-v3** (bản mới nhất). "
+        "Push nhánh và ghim `REPO_COMMIT` trước khi chạy.",
+        repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
 ]
 
 JOB_LINE_PREFIX = "JOB = "
