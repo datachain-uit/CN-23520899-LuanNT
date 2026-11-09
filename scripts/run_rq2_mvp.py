@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +42,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from survey_v2 import config as C  # noqa: E402
 from survey_v2.classify import evaluate_panel  # noqa: E402
-from survey_v2.data import load_dataset, sha256, variance_prefilter  # noqa: E402
+from survey_v2.data import drop_genes, load_dataset, sha256, variance_prefilter  # noqa: E402
 from survey_v2.fewshot import build_fewshot_manifest, fewshot_runs, n_t_sort_key, validate_fewshot_manifest  # noqa: E402
 from survey_v2.mvp import EARLY_SEED, EARLY_TARGET_FRACTION, GAMMA_MARGIN, L1_C_GRID_RULE, PI_EPSILON, early_split, gamma_path, pick_gamma, pick_gamma_positive, select_weighted, source_stability  # noqa: E402
 from survey_v2.panels import all_fixed_panels, panel_indices  # noqa: E402
@@ -84,7 +85,15 @@ def parse_args(argv=None):
     ap.add_argument("--n-jobs", type=int, default=1)
     ap.add_argument("--out", default="RQ2_mvp")
     ap.add_argument("--early-tcga", action="store_true", help="thử nghiệm sớm PC-04 trên TCGA (nguồn giả / đích giả); bỏ qua --datasets")
+    ap.add_argument("--shuffle-source-labels", action="store_true",
+                    help="H4b (RQ4): π tính trên TCGA với nhãn xáo, một hoán vị cố định mỗi cohort (seed_for(cid, 0, 0, 21)); chỉ nhánh mvp")
+    ap.add_argument("--exclude-genes", nargs="+", default=None,
+                    help="ablation RQ2: loại các gen này khỏi nguồn và đích trước mọi bước (vd. 4 gen IHC); chỉ nhánh mvp")
     args = ap.parse_args(argv)
+    if (args.shuffle_source_labels or args.exclude_genes) and args.arms != ["mvp"]:
+        ap.error("--shuffle-source-labels / --exclude-genes chỉ dùng với --arms mvp (nhánh đối chứng của các biến thể này không có nghĩa)")
+    if args.early_tcga and (args.shuffle_source_labels or args.exclude_genes):
+        ap.error("--early-tcga không dùng cùng --shuffle-source-labels / --exclude-genes")
     if args.early_tcga and (args.gamma_rule != "cv" or 0.0 not in args.gamma):
         ap.error("--early-tcga cần --gamma-rule cv và γ = 0 trong --gamma (nhánh target-only)")
     args.k = args.k or list(EARLY_K if args.early_tcga else C.FEWSHOT_K_GRID)
@@ -387,9 +396,31 @@ def main(argv=None, script=__file__):
         run_early(args, prov, t_all)
         return
     source = load_dataset(DATA_ROOT, args.source, gene_space=None)
+    if args.exclude_genes:
+        source = drop_genes(source, args.exclude_genes)
     for name in args.datasets:
         ds, out = load_dataset(DATA_ROOT, name), results_dir(args.out, name)
-        run_target(args, prov, source, ds, out, fewshot_path(ds, args.splits_root), t_all)
+        src, extra = source, {}
+        if args.exclude_genes:
+            ds = drop_genes(ds, args.exclude_genes)
+            extra.update({"excluded_genes": ds.notes["excluded_genes"], "excluded_genes_not_found": ds.notes["excluded_genes_not_found"],
+                          "excluded_from_source": source.notes["excluded_genes"]})
+        if args.shuffle_source_labels:
+            src, info = shuffled_source(source, C.cohort_id(name))
+            extra.update(info)
+        run_target(args, prov, src, ds, out, fewshot_path(ds, args.splits_root), t_all, extra_cfg=extra or None)
+
+
+SHUFFLE_SEED_TAG = 21
+
+
+def shuffled_source(source, cid: int):
+    """H4b: bản sao của nguồn với nhãn hoán vị ngẫu nhiên cố định cho cohort `cid` (seed ghi vào config). Biểu hiện, mẫu không đổi."""
+    seed = C.seed_for(cid, 0, 0, SHUFFLE_SEED_TAG)
+    y = np.random.default_rng(seed).permutation(source.y)
+    out = replace(source, y=y, notes={**source.notes, "labels_shuffled": True})
+    return out, {"source_labels_shuffled": True, "shuffle_seed": int(seed), "shuffle_rule": f"numpy default_rng(seed_for(cid, 0, 0, {SHUFFLE_SEED_TAG})).permutation(y)",
+                 "shuffle_label_agreement": float(np.mean(y == source.y))}
 
 
 if __name__ == "__main__":

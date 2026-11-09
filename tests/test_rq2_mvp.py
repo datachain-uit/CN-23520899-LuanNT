@@ -564,3 +564,60 @@ def test_main_default_arms_write_every_method_with_scores_and_resume(data_root):
     assert len(pd.read_csv(out / "rq2_mvp_per_run.csv")) == len(per_run)
     assert len(pd.read_csv(out / "rq2_mvp_selected_genes.csv")) == n_genes
     assert len(pd.read_csv(out / "rq2_mvp_scores.csv")) == n_scores
+
+
+# ------------------------------------------------------------------ RQ4 H4b (nguồn xáo nhãn) và ablation RQ2 loại 4 gen IHC (Review 07/11 Bảng 8)
+def test_shuffled_source_is_a_fixed_permutation_per_cohort(data_root):
+    mvp = _load("run_rq2_mvp")
+    from survey_v2 import config as C
+    from survey_v2.data import load_dataset
+    source = load_dataset(data_root, C.SOURCE_DATASET, gene_space=None)
+    a, ia = mvp.shuffled_source(source, C.cohort_id(COHORT))
+    b, _ = mvp.shuffled_source(source, C.cohort_id(COHORT))
+    c, _ = mvp.shuffled_source(source, C.cohort_id("gse30219"))
+    assert sorted(a.y) == sorted(source.y) and np.array_equal(a.y, b.y) and not np.array_equal(a.y, c.y)
+    assert np.array_equal(a.X, source.X) and list(a.sample_ids) == list(source.sample_ids) and not np.array_equal(a.y, source.y)
+    assert ia["source_labels_shuffled"] is True and ia["shuffle_seed"] == C.seed_for(C.cohort_id(COHORT), 0, 0, 21)
+    assert 0.3 < ia["shuffle_label_agreement"] < 0.7
+
+
+def test_variants_accept_only_the_mvp_arm():
+    mvp = _load("run_rq2_mvp")
+    for flag in (["--shuffle-source-labels"], ["--exclude-genes", "KRT5"]):
+        with pytest.raises(SystemExit):
+            mvp.parse_args(["--datasets", COHORT, *flag])
+        args = mvp.parse_args(["--datasets", COHORT, "--arms", "mvp", *flag])
+        assert args.arms == ["mvp"]
+
+
+def test_main_shuffled_source_changes_pi_but_not_target_only(data_root):
+    """H4b: π từ nguồn xáo nhãn khác π thật; target-only (γ = 0 trên L_T) không đọc nguồn nên trùng lần chạy thường từng giá trị."""
+    mvp = _load("run_rq2_mvp")
+    common = ["--datasets", COHORT, "--k", "2", "5", "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--arms", "mvp", "--save-scores"]
+    mvp.main([*common, "--out", "RQ2_h4b_base"])
+    mvp.main([*common, "--shuffle-source-labels", "--out", "RQ2_h4b_shuf"])
+    root = data_root / "results" / "survey_v2"
+    base, shuf = (pd.read_csv(root / d / COHORT / "rq2_mvp_per_run.csv", dtype={"n_t": str}) for d in ("RQ2_h4b_base", "RQ2_h4b_shuf"))
+    key = ["split", "subset", "n_t", "k"]
+    to = lambda f: f[(f.gamma_rule == "fixed") & (f.gamma == 0) & (f.prefilter_space == "target")].set_index(key).sort_index()  # noqa: E731
+    pd.testing.assert_series_equal(to(base).auroc, to(shuf).auroc)
+    pi_b, pi_s = (pd.read_csv(root / d / COHORT / "rq2_source_pi.csv") for d in ("RQ2_h4b_base", "RQ2_h4b_shuf"))
+    assert pi_b.gene.tolist() == pi_s.gene.tolist() and not np.allclose(pi_b.pi, pi_s.pi)
+    cfg = json.loads((root / "RQ2_h4b_shuf" / COHORT / "config.json").read_text(encoding="utf-8"))
+    assert cfg["source_labels_shuffled"] is True and "shuffle_seed" in cfg and cfg["arms"] == ["mvp"]
+    assert set(shuf.gamma_rule) == {"fixed", "m5_cv", "m5_pos"}
+
+
+def test_main_exclude_genes_removes_ihc_genes_everywhere(data_root):
+    mvp = _load("run_rq2_mvp")
+    ihc = ["NKX2-1", "TP63", "NAPSA", "KRT5"]
+    mvp.main(["--datasets", COHORT, "--k", "2", "5", "--gamma", "0", "1", "--n-t", "5", "--prefilter", str(PREFILTER), "--arms", "mvp",
+              "--exclude-genes", *ihc, "--out", "RQ2_noihc"])
+    out = data_root / "results" / "survey_v2" / "RQ2_noihc" / COHORT
+    genes = pd.read_csv(out / "rq2_mvp_selected_genes.csv")
+    pi = pd.read_csv(out / "rq2_source_pi.csv")
+    assert not set(genes.gene) & set(ihc) and not set(pi.gene) & set(ihc)
+    per = pd.read_csv(out / "rq2_mvp_per_run.csv")
+    assert (per.n_ihc_in_panel == 0).all()
+    cfg = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert sorted(cfg["excluded_genes"]) == sorted(ihc) and sorted(cfg["excluded_from_source"]) == sorted(ihc)
