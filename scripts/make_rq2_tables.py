@@ -215,9 +215,22 @@ class Run:
 
 
 def _arm_rows(per: pd.DataFrame, arm: str, n_t: str, ks, mvp_rule: str) -> pd.DataFrame:
+    """arm: "mvp" (dòng quy tắc mvp_rule), "target_only", tên method (D3, IHC, baseline R), hoặc khai báo đầy đủ
+    "method|gamma_rule|gamma|prefilter_space" (ô trống = không lọc), vd. "mvp|fixed|0|source" (γ = 0 trên không gian gen của nguồn),
+    "mvp|m5_cv||", "mvp_noihc|m5_pos||" (nhánh của tệp khác đã đổi tên method)."""
     sel = (per.n_t == n_t) & per.k.isin(ks)
-    if arm == "mvp":
-        sel &= per.gamma_rule == mvp_rule
+    if "|" in arm:
+        method, rule, gamma, space = (arm.split("|") + ["", "", "", ""])[:4]
+        if method:
+            sel &= per.method == method
+        if rule:
+            sel &= per.gamma_rule == rule
+        if gamma != "":
+            sel &= per.gamma_key == float(gamma)
+        if space:
+            sel &= per.prefilter_space == space
+    elif arm == "mvp":
+        sel &= (per.gamma_rule == mvp_rule) & (per.method == "mvp")
     elif arm == "target_only":
         sel &= (per.gamma_rule == "fixed") & (per.method == "mvp") & (per.gamma_key == 0) & (per.prefilter_space == "target")
     else:
@@ -255,8 +268,7 @@ def collect_runs(per: pd.DataFrame, sc: pd.DataFrame, cohort: str, n_t: str, arm
             for arm in (arm_a, arm_b):
                 r = rows[arm]
                 row = r[(r.split == split) & (r.subset == subset) & (r.k == k)].iloc[0]
-                method = "mvp" if arm in ("mvp", "target_only") else arm
-                g = groups.get((method, float(row.gamma_key), row.prefilter_space, split, subset, k))
+                g = groups.get((row.method, float(row.gamma_key), row.prefilter_space, split, subset, k))
                 if g is None or g.empty:
                     raise ValueError(f"{cohort} n_T = {n_t}: thiếu điểm của {arm} ở (split {split}, subset {subset}, k {k})")
                 g = g.sort_values("sample_id")
@@ -311,15 +323,19 @@ def bootstrap_cell(runs: list, n_boot: int, seed: int, return_draws: bool = Fals
 def pool(cells: pd.DataFrame, margin: float) -> dict:
     """IVW và trọng số bằng nhau qua cohort; p một phía của H0: Δ ≤ −margin; I² theo Cochran Q."""
     d, se = cells.delta.to_numpy(float), cells.se.to_numpy(float)
-    w = 1.0 / se**2
-    d_ivw, se_ivw = float((w * d).sum() / w.sum()), float(1.0 / np.sqrt(w.sum()))
     d_eq, se_eq = float(d.mean()), float(np.sqrt((se**2).sum()) / len(d))
-    q = float((w * (d - d_ivw) ** 2).sum())
+    if (se > 0).all():
+        w = 1.0 / se**2
+        d_ivw, se_ivw = float((w * d).sum() / w.sum()), float(1.0 / np.sqrt(w.sum()))
+        q = float((w * (d - d_ivw) ** 2).sum())
+    else:  # SE = 0 ở một cohort (hai nhánh trùng hệt ở mọi lần chạy, vd. ablation γ = γ của m5_pos): IVW không xác định
+        w, d_ivw, se_ivw, q = np.full(len(d), np.nan), np.nan, np.nan, np.nan
+    p_of = lambda x, s: float(norm.sf((x + margin) / s)) if s > 0 else np.nan  # noqa: E731
     out = {"n_cohorts": int(len(d)), "delta_ivw": d_ivw, "se_ivw": se_ivw, "lower_ivw": d_ivw - Z95 * se_ivw,
-           "p_ivw": float(norm.sf((d_ivw + margin) / se_ivw)), "delta_eq": d_eq, "se_eq": se_eq, "lower_eq": d_eq - Z95 * se_eq,
-           "p_eq": float(norm.sf((d_eq + margin) / se_eq)), "q": q, "i2": max(0.0, (q - (len(d) - 1)) / q) if q > 0 else 0.0, "margin": margin,
+           "p_ivw": p_of(d_ivw, se_ivw), "delta_eq": d_eq, "se_eq": se_eq, "lower_eq": d_eq - Z95 * se_eq,
+           "p_eq": p_of(d_eq, se_eq), "q": q, "i2": max(0.0, (q - (len(d) - 1)) / q) if q > 0 else (np.nan if np.isnan(q) else 0.0), "margin": margin,
            "ci95_ivw_low": d_ivw - Z975 * se_ivw, "ci95_ivw_high": d_ivw + Z975 * se_ivw, "ci95_eq_low": d_eq - Z975 * se_eq, "ci95_eq_high": d_eq + Z975 * se_eq}
-    for c, wi in zip(cells.cohort, w / w.sum()):
+    for c, wi in zip(cells.cohort, w / np.nansum(w) if np.isfinite(w).all() else w):
         out[f"w_{c}"] = float(wi)
     return out
 
