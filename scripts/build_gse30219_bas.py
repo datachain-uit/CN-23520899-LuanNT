@@ -8,7 +8,10 @@ mẫu R5 giữ nguyên từng byte; chỉ thêm mẫu histology = BAS (basaloid 
 QC trên TOÀN BỘ mẫu của biến thể (5 mẫu R5 đã loại + 141 + BAS):
   * kế thừa mọi mẫu trong gse30219/excluded_samples_gse30219.csv;
   * giới tính (QĐ22, scripts/check_sex_consistency.py::sex_table, k-means trên chính biến thể): cách ly verdict opposite / inconsistent;
-  * mẫu trùng (QĐ21, như scripts/geo_sample_qc.py rz-screen): cặp r_z ≥ 0,90 hoặc r thô ≥ 0,99 -> cách ly cả hai mẫu.
+  * mẫu trùng (QĐ21, như scripts/geo_sample_qc.py rz-screen): ghi mọi cặp r_z ≥ 0,90 hoặc r thô ≥ 0,99; mỗi cặp phải có quyết định
+    trong tệp đã commit qc_decisions/duplicate_decisions_gse30219_bas.csv (sample_a, sample_b, decision ∈ {keep_both, drop_a, drop_b},
+    reason), như QĐ21 quyết từng ca. Có cặp chưa quyết -> in các cặp, không ghi gì, thoát mã 2 (Review 09/11 V1, Y79). Bản dựng 09/11
+    (55d9ebc) có 0 cặp nên tệp quyết định rỗng.
 Mẫu R5 bị cờ mới (không có trong danh sách cũ) cũng cách ly theo cùng quy tắc và ghi rõ trong config (r5_newly_flagged).
 
     python scripts/build_gse30219_bas.py            # $KLTN_DATA_ROOT/experiment-data-geo-target/gse30219_bas
@@ -47,6 +50,18 @@ LABELS = {"ADC": ("LUAD", 0), "SQC": ("LUSC", 1), "BAS": ("LUSC", 1)}
 RZ_THRESHOLD, RAW_THRESHOLD = 0.90, 0.99            # như geo_sample_qc.py rz-screen (QĐ21)
 QUARANTINE = ("opposite", "inconsistent")           # QĐ22
 RAW = DATA_ROOT / "geo_target_work" / "raw"
+DECISIONS_DEFAULT = REPO / "qc_decisions" / f"duplicate_decisions_{NAME}.csv"
+DECISION_COLUMNS = ["sample_a", "sample_b", "decision", "reason"]
+DECISION_VALUES = ("keep_both", "drop_a", "drop_b")
+EXIT_UNDECIDED = 2
+
+
+class UndecidedPairs(Exception):
+    """Có cặp vượt ngưỡng trùng chưa có quyết định trong tệp đã commit."""
+
+    def __init__(self, pairs: pd.DataFrame):
+        self.pairs = pairs
+        super().__init__(f"{len(pairs)} cặp mẫu trùng chưa có quyết định")
 
 
 def parse_args(argv=None):
@@ -55,6 +70,7 @@ def parse_args(argv=None):
     ap.add_argument("--annotation", type=Path, default=RAW / "GPL570" / "GPL570.annot.gz")
     ap.add_argument("--base-dir", type=Path, default=None, help="thư mục gse30219 (bản R5 sau QC); mặc định theo registry")
     ap.add_argument("--out", type=Path, default=None, help=f"mặc định $KLTN_DATA_ROOT/{C.GEO_TARGET_DIR}/{NAME}")
+    ap.add_argument("--decisions", type=Path, default=DECISIONS_DEFAULT, help="tệp quyết định từng cặp trùng (đã commit)")
     return ap.parse_args(argv)
 
 
@@ -177,8 +193,49 @@ def build_variant(series_matrix: Path, annotation: Path, base_dir: Path) -> Vari
 
 
 # ------------------------------------------------------------------------------------------------- QC
-def run_qc(v: Variant) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """(mẫu cách ly kèm lý do, bảng giới tính, cặp trùng). Trên toàn bộ mẫu của biến thể."""
+def load_decisions(path: Path | None) -> pd.DataFrame:
+    """Tệp quyết định (sample_a, sample_b, decision, reason); None -> rỗng. Kiểm giá trị, lý do không rỗng, không trùng cặp."""
+    if path is None:
+        return pd.DataFrame(columns=DECISION_COLUMNS)
+    dec = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if list(dec.columns)[:4] != DECISION_COLUMNS:
+        raise ValueError(f"{path}: cần các cột {DECISION_COLUMNS}, thấy {list(dec.columns)}")
+    bad = dec[~dec.decision.isin(DECISION_VALUES)]
+    if len(bad):
+        raise ValueError(f"{path}: decision phải thuộc {DECISION_VALUES}, thấy {sorted(set(bad.decision))}")
+    if (dec.reason.str.strip() == "").any():
+        raise ValueError(f"{path}: mỗi quyết định cần lý do")
+    keys = [frozenset((a, b)) for a, b in zip(dec.sample_a, dec.sample_b)]
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"{path}: cặp trùng lặp trong tệp quyết định")
+    return dec
+
+
+def apply_decisions(pairs: pd.DataFrame, decisions: pd.DataFrame) -> tuple[pd.DataFrame, dict, list]:
+    """(cặp kèm decision/decision_reason, {mẫu: lý do cách ly}, quyết định không dùng tới). Cặp chưa quyết -> UndecidedPairs."""
+    lookup = {frozenset((r.sample_a, r.sample_b)): r for r in decisions.itertuples(index=False)}
+    pairs = pairs.copy()
+    pairs["decision"], pairs["decision_reason"] = "", ""
+    drop, used = {}, set()
+    for i, p in pairs.iterrows():
+        key = frozenset((p.sample_a, p.sample_b))
+        d = lookup.get(key)
+        if d is None:
+            continue
+        used.add(key)
+        pairs.at[i, "decision"], pairs.at[i, "decision_reason"] = d.decision, d.reason
+        if d.decision != "keep_both":
+            s, other = (d.sample_a, d.sample_b) if d.decision == "drop_a" else (d.sample_b, d.sample_a)
+            drop.setdefault(s, []).append(f"QĐ21 mẫu trùng với {other}: r_z = {p.r_z}, r thô = {p.r_raw}; quyết định {d.decision}: {d.reason}")
+    pending = pairs[pairs.decision == ""]
+    if len(pending):
+        raise UndecidedPairs(pending)
+    unused = [f"{r.sample_a}|{r.sample_b}" for r in decisions.itertuples(index=False) if frozenset((r.sample_a, r.sample_b)) not in used]
+    return pairs, drop, unused
+
+
+def run_qc(v: Variant, decisions: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """(mẫu cách ly kèm lý do, bảng giới tính, cặp trùng kèm quyết định). Trên toàn bộ mẫu của biến thể."""
     reasons: dict[str, list] = {}
     for r in v.r5_excluded.itertuples(index=False):
         reasons.setdefault(r.sample_id, []).append(f"kế thừa R5: {r.reason}")
@@ -196,20 +253,21 @@ def run_qc(v: Variant) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                            "group_a": v.meta.variant_group.iloc[i], "group_b": v.meta.variant_group.iloc[j]}
                           for i, j in zip(iu[0][hit], iu[1][hit])], columns=["sample_a", "sample_b", "r_z", "r_raw", "group_a", "group_b"])
     pairs = pairs.sort_values("r_z", ascending=False, ignore_index=True)
-    for p in pairs.itertuples(index=False):
-        for s, other in ((p.sample_a, p.sample_b), (p.sample_b, p.sample_a)):
-            reasons.setdefault(s, []).append(f"QĐ21 mẫu trùng với {other}: r_z = {p.r_z}, r thô = {p.r_raw}")
+    pairs, drop, unused = apply_decisions(pairs, load_decisions(None) if decisions is None else decisions)
+    for s, r in drop.items():
+        reasons.setdefault(s, []).extend(r)
+    pairs.attrs["unused_decisions"] = unused
     excluded = pd.DataFrame([{"sample_id": s, "reason": "; ".join(r), "variant_group": v.meta.variant_group.get(s, "")} for s, r in reasons.items()])
     sex.attrs["info"] = info
     return excluded, sex, pairs
 
 
 # ------------------------------------------------------------------------------------------------- ghi
-def write_variant(v: Variant, out: Path, prov: dict) -> dict:
+def write_variant(v: Variant, out: Path, prov: dict, decisions_path: Path | None = None) -> dict:
     out = Path(out)
     if out.exists():
         raise FileExistsError(f"{out} đã có: không ghi đè dữ liệu (xoá hoặc đổi tên sau khi kiểm)")
-    excluded, sex, pairs = run_qc(v)
+    excluded, sex, pairs = run_qc(v, load_decisions(decisions_path))
     drop = set(excluded.sample_id)
     kept = [s for s in v.X.index if s not in drop]
     X, meta = v.X.loc[kept], v.meta.loc[kept]
@@ -236,9 +294,14 @@ def write_variant(v: Variant, out: Path, prov: dict) -> dict:
            "r5_values_identical": True, "n_duplicate_pairs": int(len(pairs)),
            "duplicate_pairs_bas_r5": int(((pairs.group_a != pairs.group_b)).sum()) if len(pairs) else 0,
            "qc_rules": {"sex": "QĐ22: sex_table (k-means trên biến thể), cách ly opposite / inconsistent",
-                        "duplicates": f"QĐ21: r_z >= {RZ_THRESHOLD} hoặc r thô >= {RAW_THRESHOLD} trên mọi cặp của biến thể; cách ly cả hai mẫu",
+                        "duplicates": f"QĐ21: r_z >= {RZ_THRESHOLD} hoặc r thô >= {RAW_THRESHOLD} trên mọi cặp của biến thể; quyết định "
+                                      f"từng cặp theo tệp đã commit ({', '.join(DECISION_VALUES)}); cặp chưa quyết -> dừng mã {EXIT_UNDECIDED}",
                         "inherited": f"mọi mẫu trong {BASE}/excluded_samples_{BASE}.csv"},
            "sex_qc_info": {k: (list(x) if isinstance(x, tuple) else x) for k, x in sex.attrs.get("info", {}).items()},
+           "duplicate_decisions_file": str(decisions_path) if decisions_path else None,
+           "duplicate_decisions_sha256": sha256(decisions_path) if decisions_path else None,
+           "duplicate_decisions_applied": pairs.decision.value_counts().to_dict() if len(pairs) else {},
+           "duplicate_decisions_unused": pairs.attrs.get("unused_decisions", []),
            "sources": v.sources,
            "files_sha256": {f: sha256(out / f) for f in ("expression.h5", "metadata.csv", f"excluded_samples_{NAME}.csv")},
            "split": f"chưa có: chạy scripts/build_e1_repeated_splits.py --datasets {NAME} (5×5, seed 42–46)"}
@@ -249,13 +312,29 @@ def write_variant(v: Variant, out: Path, prov: dict) -> dict:
     return cfg
 
 
+def build_and_write(series_matrix: Path, annotation: Path, base: Path, out: Path, prov: dict, decisions_path: Path | None):
+    """Dựng và ghi; có cặp trùng chưa quyết -> in các cặp, không ghi gì, trả EXIT_UNDECIDED. Thành công -> config."""
+    try:
+        return write_variant(build_variant(series_matrix, annotation, base), out, prov, decisions_path)
+    except UndecidedPairs as err:
+        print(f"{len(err.pairs)} cặp mẫu trùng chưa có quyết định trong {decisions_path}; thêm một dòng mỗi cặp "
+              f"(sample_a, sample_b, decision ∈ {DECISION_VALUES}, reason), commit rồi chạy lại:")
+        print(err.pairs[["sample_a", "sample_b", "r_z", "r_raw", "group_a", "group_b"]].to_string(index=False))
+        if Path(out).exists():
+            raise RuntimeError(f"{out} không được tạo khi dừng")
+        return EXIT_UNDECIDED
+
+
 def main(argv=None, script=__file__) -> int:
     from survey_v2.data import resolve_dataset_dir
     args = parse_args(argv)
     base = args.base_dir or resolve_dataset_dir(DATA_ROOT, BASE)
     out = args.out or DATA_ROOT / C.GEO_TARGET_DIR / NAME
-    prov = start_run(script, data_files=[args.series_matrix, args.annotation, base / "expression.h5", base / "metadata.csv"])   # cây sạch + HEAD đã push
-    cfg = write_variant(build_variant(args.series_matrix, args.annotation, base), out, prov)
+    prov = start_run(script, data_files=[args.series_matrix, args.annotation, base / "expression.h5", base / "metadata.csv",
+                                         args.decisions])   # cây sạch + HEAD đã push
+    cfg = build_and_write(args.series_matrix, args.annotation, base, out, prov, args.decisions)
+    if not isinstance(cfg, dict):
+        return cfg
     print(json.dumps({k: cfg[k] for k in ("n_before_qc", "n_after_qc", "n_per_class", "n_bas_before_qc", "n_bas_kept", "bas_fraction_of_lusc",
                                          "excluded_bas", "r5_newly_flagged", "n_duplicate_pairs")}, ensure_ascii=False, indent=2))
     print("ghi", out)

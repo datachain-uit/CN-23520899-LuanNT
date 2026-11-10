@@ -127,18 +127,58 @@ def test_variant_labels_bas_as_lusc_and_keeps_only_adc_sqc_bas(tmp_path):
     assert list(meta.index[:25]) == list(pd.read_hdf(base / "expression.h5", key="expression").index)    # 141 mẫu R5 giữ thứ tự cũ, đứng đầu
 
 
-def test_qc_inherits_r5_exclusions_and_quarantines_bas_duplicate_and_sex_mismatch(tmp_path):
+def _decisions(tmp_path, rows):
+    path = tmp_path / "duplicate_decisions.csv"
+    pd.DataFrame(rows, columns=["sample_a", "sample_b", "decision", "reason"]).to_csv(path, index=False)
+    return m.load_decisions(path)
+
+
+def test_qc_inherits_r5_exclusions_and_quarantines_sex_mismatch_and_applies_pair_decision(tmp_path):
     sm, ann, base, ids, hist = _fixture(tmp_path, dup=(2, 5), flip_sex=4)
     v = m.build_variant(sm, ann, base)
-    excluded, sex_tab, pairs = m.run_qc(v)
+    bas_ids = list(v.meta.index[v.meta.histology_raw == "BAS"])
+    dec = _decisions(tmp_path, [(ids[5], bas_ids[2], "drop_b", "bản sao kỹ thuật của mẫu R5; giữ mẫu R5")])   # thứ tự cặp đảo so với bảng sàng
+    excluded, sex_tab, pairs = m.run_qc(v, dec)
     reasons = excluded.set_index("sample_id").reason
     r5_first = pd.read_csv(base / "excluded_samples_gse30219.csv").sample_id.iloc[0]
     assert "kế thừa" in reasons[r5_first]
-    bas_ids = list(v.meta.index[v.meta.histology_raw == "BAS"])
     assert "opposite" in reasons[bas_ids[4]]
-    dup_pair = {bas_ids[2], ids[5]}
-    assert dup_pair <= set(reasons.index) and all("r_z" in reasons[s] or "r thô" in reasons[s] for s in dup_pair)
-    assert len(pairs) >= 1 and set(pairs.iloc[0][["sample_a", "sample_b"]]) == dup_pair
+    assert bas_ids[2] in reasons.index and "drop_b" in reasons[bas_ids[2]] and "r_z" in reasons[bas_ids[2]]
+    assert ids[5] not in reasons.index                                   # mẫu còn lại của cặp được giữ theo quyết định
+    assert len(pairs) >= 1 and set(pairs.iloc[0][["sample_a", "sample_b"]]) == {bas_ids[2], ids[5]} and pairs.iloc[0].decision == "drop_b"
+
+
+def test_keep_both_keeps_both_samples(tmp_path):
+    sm, ann, base, ids, hist = _fixture(tmp_path, dup=(2, 5))
+    v = m.build_variant(sm, ann, base)
+    bas_ids = list(v.meta.index[v.meta.histology_raw == "BAS"])
+    excluded, _, pairs = m.run_qc(v, _decisions(tmp_path, [(bas_ids[2], ids[5], "keep_both", "hai bệnh nhân khác nhau (đã kiểm metadata)")]))
+    assert not {bas_ids[2], ids[5]} & set(excluded.sample_id) and (pairs.decision == "keep_both").any()
+
+
+def test_undecided_pair_stops_with_exit_code_2_and_writes_nothing(tmp_path, capsys):
+    sm, ann, base, ids, hist = _fixture(tmp_path, dup=(2, 5))
+    v = m.build_variant(sm, ann, base)
+    with pytest.raises(m.UndecidedPairs) as err:
+        m.run_qc(v, m.load_decisions(None))
+    assert len(err.value.pairs) >= 1
+    out = tmp_path / "gse30219_bas"
+    assert m.build_and_write(sm, ann, base, out, prov={}, decisions_path=None) == 2
+    assert not out.exists() and "chưa có quyết định" in capsys.readouterr().out
+
+
+def test_decision_file_is_validated(tmp_path):
+    with pytest.raises(ValueError, match="decision"):
+        _decisions(tmp_path, [("GSM1", "GSM2", "drop_both", "x")])
+    with pytest.raises(ValueError, match="lý do"):
+        _decisions(tmp_path, [("GSM1", "GSM2", "keep_both", "")])
+    with pytest.raises(ValueError, match="trùng"):
+        _decisions(tmp_path, [("GSM1", "GSM2", "keep_both", "a"), ("GSM2", "GSM1", "drop_a", "b")])
+
+
+def test_committed_decision_file_loads():
+    dec = m.load_decisions(m.DECISIONS_DEFAULT)
+    assert list(dec.columns)[:4] == ["sample_a", "sample_b", "decision", "reason"]
 
 
 def test_write_outputs_layout_counts_and_refuses_overwrite(tmp_path):
