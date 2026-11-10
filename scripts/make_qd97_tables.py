@@ -15,7 +15,7 @@ không đổi quy tắc hay bảng H2, H2b, H2c đã sinh (QĐ97f). Mọi bảng
         --rq2-tables rq2_tables_198b840_results.zip
 
 --rq2-tables (tuỳ chọn): kiểm các ô từng cohort trùng rq2_cells.csv đã nộp (dừng nếu lệch). Đầu ra: results/survey_v2/RQ2_qd97_tables/
-{qd97a_decomposition_cells.csv, qd97a_decomposition_pooled.csv, qd97b_true_vs_shuffled_cells.csv, qd97b_true_vs_shuffled_pooled.csv,
+{qd97a_decomposition_cells.csv, qd97a_decomposition_pooled.csv, qd97a_decomposition_by_k_{cells,pooled}.csv (từng k, W4), qd97b_true_vs_shuffled_cells.csv, qd97b_true_vs_shuffled_pooled.csv,
 qd97d_cohort_table.csv, qd97d_secondary_metrics.csv, qd97d_gse42127_by_k.csv, config.json}.
 """
 
@@ -118,6 +118,17 @@ def decomposition(data: dict, n_boot: int) -> dict:
     return paired(data, DECOMP, n_boot, tag="qd97a")
 
 
+def decomposition_by_k(data: dict, n_boot: int) -> dict:
+    """QĐ97a theo từng k (W4, KBTN v2.6): cùng các hiệu của decomposition() với ks = (k,) cho mọi k của MVP và mọi cohort."""
+    ks_all = sorted({int(k) for per, _ in data.values() for k in per[per.method == "mvp"].k.unique()})
+    cells, pooled = [], []
+    for k in ks_all:
+        out = paired(data, DECOMP, n_boot, tag="qd97a_k", ks=(k,))
+        cells.append(out["cells"])
+        pooled.append(out["pooled"].assign(k=str(k)))
+    return {"cells": pd.concat(cells, ignore_index=True), "pooled": pd.concat(pooled, ignore_index=True)}
+
+
 def true_vs_shuffled(data: dict, shuffled: dict, n_boot: int) -> dict:
     merged = {}
     for c, (per, sc) in data.items():
@@ -214,11 +225,13 @@ def main(argv=None, script=__file__) -> int:
     cohort_tab = cohort_table(data, args.n_boot)
     n_match = check_against_submitted(cohort_tab, args.rq2_tables) if args.rq2_tables else None
     dec = decomposition(data, args.n_boot)
+    dec_k = decomposition_by_k(data, args.n_boot)
     tvs = true_vs_shuffled(data, shuf, args.n_boot)
     sec = secondary_metrics(data)
     byk = cohort_by_k(data, args.n_boot, "gse42127") if "gse42127" in data else pd.DataFrame()
     out = results_dir(args.out)
     tables = {"qd97a_decomposition_cells": dec["cells"], "qd97a_decomposition_pooled": dec["pooled"],
+              "qd97a_decomposition_by_k_cells": dec_k["cells"], "qd97a_decomposition_by_k_pooled": dec_k["pooled"],
               "qd97b_true_vs_shuffled_cells": tvs["cells"], "qd97b_true_vs_shuffled_pooled": tvs["pooled"],
               "qd97d_cohort_table": cohort_tab, "qd97d_secondary_metrics": sec, "qd97d_gse42127_by_k": byk}
     for name, frame in tables.items():

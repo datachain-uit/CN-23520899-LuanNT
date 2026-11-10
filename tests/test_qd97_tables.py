@@ -88,3 +88,29 @@ def test_true_minus_shuffled_pairs_runs():
     sel = lambda f: f[(f.gamma_rule == "m5_pos") & (f.n_t == "5") & f.k.isin([2, 3, 5])].set_index(["split", "subset", "k"]).auroc  # noqa: E731
     a, b = data["gse37745"][0], shuf["gse37745"][0]
     assert row.delta == pytest.approx((sel(a) - sel(b)).groupby(level=["split", "subset"]).mean().mean(), abs=1e-12)
+
+
+# ------------------------------------------------------------------------------------------------- QĐ97a theo từng k (W4)
+def test_decomposition_by_k_covers_every_k_and_cohort():
+    out = m.decomposition_by_k(_data(), n_boot=20)
+    cells, pooled = out["cells"], out["pooled"]
+    assert set(cells.k) == {"2", "3", "4", "5", "10"} and set(cells.cohort) == set(COHORTS)
+    assert {"k", "pool_set", "i2"} <= set(pooled.columns) and set(pooled.k) == {"2", "3", "4", "5", "10"}
+
+
+def test_delta_pi_is_zero_when_mvp_equals_to_source():
+    chosen = {(s, u, n, k): 0.0 for s in range(2) for u in range(2) for n in ("5", "10", "20", "40") for k in (2, 3, 4, 5, 10)}
+    data = {c: synthetic(cohort=c, n_ts=("5", "10", "20", "40"), ks=(2, 3, 4, 5, 10), seed=i, chosen=chosen) for i, c in enumerate(COHORTS)}
+    t = m.decomposition_by_k(data, n_boot=10)["cells"]
+    assert np.abs(t[t.comparison == "decomp_pi"].delta).max() < 1e-12
+
+
+def test_space_plus_pi_equals_h2_delta_run_by_run():
+    per, sc = _data()["gse37745"]
+    for k in ((2,), (2, 3, 5)):
+        tot = m.m2.collect_runs(per, sc, "gse37745", "5", "mvp", "target_only", k)
+        sp = m.m2.collect_runs(per, sc, "gse37745", "5", m.TO_SOURCE, "target_only", k)
+        pi = m.m2.collect_runs(per, sc, "gse37745", "5", "mvp", m.TO_SOURCE, k)
+        for a, b, c in zip(tot, sp, pi):
+            assert (a.split, a.subset) == (b.split, b.subset) == (c.split, c.subset)
+            assert np.allclose(a.D, b.D + c.D, atol=1e-12)

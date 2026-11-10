@@ -116,3 +116,31 @@ def test_gamma_distribution_counts_chosen_gamma_by_rule():
     row = d[(d.cohort == "gse30219") & (d.rule == "m5_pos") & (d.n_t == "5") & (d.k == 2)].set_index("gamma").n_runs
     assert row.to_dict() == {0.5: 3, 2.0: 1}
     assert set(d.rule) == {"m5_pos", "m5_cv"}
+
+
+# ------------------------------------------------------------------------------------------------- H4a đủ nhánh (QĐ97c, W2)
+def _genes_d3(per: pd.DataFrame, seed=0):
+    """Thêm gen cho pooled (ngẫu nhiên) và select-on-source (cố định) vào gen của các dòng fixed."""
+    rng = np.random.default_rng(seed)
+    rows = [_genes(per, seed=seed)]
+    for r in per[per.method.isin(["pooled", "select_on_source"])].itertuples():
+        genes = [f"G{j}" for j in (range(r.k) if r.method == "select_on_source" else rng.choice(40, size=r.k, replace=False))]
+        rows.append(pd.DataFrame([{"cohort": r.cohort, "split": r.split, "subset": r.subset, "n_t": r.n_t, "k": r.k, "method": r.method,
+                                   "gamma": np.nan, "prefilter_space": r.prefilter_space, "rank": i + 1, "gene": g} for i, g in enumerate(genes)]))
+    return pd.concat(rows, ignore_index=True)
+
+
+def test_h4a_reports_each_arm_with_ci_and_pooled_comparison_only_where_d3_ran():
+    data = {c: synthetic(cohort=c, n_ts=("5", "10", "40"), ks=(2, 3, 5), seed=i) for i, c in enumerate(COHORTS)}
+    genes = {c: _genes_d3(data[c][0], seed=i) for i, c in enumerate(COHORTS)}
+    cells = m.h4a_cells(data, genes, {c: 40 for c in COHORTS})
+    r = cells[(cells.cohort == "gse30219") & (cells.n_t == "5")].iloc[0]
+    for arm in ("mvp", "target_only", "pooled"):
+        assert r[f"ci_low_{arm}"] < r[f"phi_{arm}"] < r[f"ci_high_{arm}"] or r[f"se_{arm}"] == 0
+    assert r.phi_select_on_source == pytest.approx(1.0) and r.delta_vs_pooled == pytest.approx(r.phi_mvp - r.phi_pooled)
+    assert np.isnan(cells[(cells.n_t == "40")].phi_pooled).all()          # D3 không chạy ở n_T = 40
+    pooled = m.h4a_pooled(cells)
+    assert set(pooled.comparison) == {"mvp_vs_target_only", "mvp_vs_pooled"}
+    assert set(pooled[pooled.comparison == "mvp_vs_pooled"].n_t) == {"5", "10"}
+    out, levels = m.decide_h4a(pooled)                                    # quyết định chỉ dùng mvp_vs_target_only
+    assert [n for n, _ in levels] == ["5", "10"]

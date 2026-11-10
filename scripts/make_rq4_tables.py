@@ -4,7 +4,8 @@ Dùng chung máy bootstrap hai tầng, ghép cặp và gộp của scripts/make_
 
 H4b (chỉ báo cáo, M3): MVP với π từ TCGA xáo nhãn (RQ2_mvp_shuffled) so với target-only trong cùng lần chạy; biên 0,01 như H2c; gộp IVW và
   trọng số bằng nhau (GPL570; 4 cohort là độ nhạy); cận dưới một phía 95 % ≤ −0,01 thì ghi "không chứng minh được không thua kém".
-H4a: độ ổn định Nogueira (survey_v2.stability.nogueira, cùng mã với E4) của panel MVP và target-only qua 20 lần chạy mỗi (cohort, n_T, k),
+H4a: độ ổn định Nogueira (survey_v2.stability.nogueira, cùng mã với E4) của panel MVP, target-only, pooled (và select-on-source, chỉ báo kèm;
+  QĐ97c) qua 20 lần chạy mỗi (cohort, n_T, k), CI 95 % từng nhánh; quyết định chỉ theo MVP − target-only, MVP − pooled là mô tả;
   d = cỡ không gian gen G. LỰA CHỌN CÀI ĐẶT (KBTN chưa nêu, cần GVHD xác nhận): Δ = Φ(MVP) − Φ(TO) lấy trung bình k ∈ {2, 3, 5};
   SE của hiệu = √(SE²_MVP + SE²_TO) theo phương sai tiệm cận của Nogueira (bảo thủ: bỏ qua tương quan dương giữa hai nhánh), SE của trung
   bình theo k = trung bình các SE (cận trên); gộp IVW và trọng số bằng nhau qua GPL570; một mức n_T ≤ 20 đạt khi Δ ≥ 0,1 và CI 95 % hai
@@ -169,17 +170,34 @@ def h4b_tables(shuffled: dict, n_boot: int) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------- H4a
+H4A_ARMS = ("mvp", "target_only", "pooled", "select_on_source")
+H4A_MAIN, H4A_POOLED = "mvp_vs_target_only", "mvp_vs_pooled"     # quyết định H4a chỉ theo mvp_vs_target_only; mvp_vs_pooled mô tả (QĐ97c)
+
+
+def _arm_select(per: pd.DataFrame, arm: str) -> pd.DataFrame:
+    if arm == "mvp":
+        return per[(per.method == "mvp") & (per.gamma_rule == m2.MVP_RULE)]
+    if arm == "target_only":
+        return per[(per.method == "mvp") & (per.gamma_rule == "fixed") & (per.gamma == 0) & (per.prefilter_space == "target")]
+    return per[per.method == arm]
+
+
 def _panels(per: pd.DataFrame, genes: pd.DataFrame, n_t: str, k: int, arm: str) -> list:
-    """Danh sách panel (tập gen) của nhánh qua các lần chạy. MVP lấy panel của dòng fixed đúng γ, không gian gen mà dòng m5_pos ghi."""
+    """Danh sách panel (tập gen) của nhánh qua các lần chạy; [] nếu nhánh không chạy ở (n_T, k). MVP lấy panel của dòng fixed đúng γ,
+    không gian gen mà dòng m5_pos ghi; pooled, select-on-source lấy panel của chính phương pháp đó."""
     per = per.copy(); genes = genes.copy()
     per["n_t"] = per.n_t.astype(str); genes["n_t"] = genes.n_t.astype(str)
-    sel = per[(per.n_t == n_t) & (per.k == k) & (per.method == "mvp")]
-    rows = sel[sel.gamma_rule == m2.MVP_RULE] if arm == "mvp" else sel[(sel.gamma_rule == "fixed") & (sel.gamma == 0) & (sel.prefilter_space == "target")]
-    g = genes[(genes.n_t == n_t) & (genes.k == k) & (genes.method == "mvp")]
-    groups = {key: set(x.gene) for key, x in g.groupby(["split", "subset", "gamma", "prefilter_space"])}
+    rows = _arm_select(per[(per.n_t == n_t) & (per.k == k)], arm)
+    if rows.empty:
+        return []
+    method = "mvp" if arm in ("mvp", "target_only") else arm
+    g = genes[(genes.n_t == n_t) & (genes.k == k) & (genes.method == method)].copy()
+    g["gamma_key"] = g.gamma.fillna(-1.0).astype(float)
+    groups = {key: set(x.gene) for key, x in g.groupby(["split", "subset", "gamma_key", "prefilter_space"])}
     out = []
     for r in rows.sort_values(["split", "subset"]).itertuples():
-        panel = groups.get((r.split, r.subset, float(r.gamma), r.prefilter_space))
+        gk = -1.0 if pd.isna(r.gamma) else float(r.gamma)
+        panel = groups.get((r.split, r.subset, gk, r.prefilter_space))
         if panel is None or len(panel) != k:
             raise ValueError(f"n_T = {n_t}, k = {k}: thiếu panel {arm} ở (split {r.split}, subset {r.subset})")
         out.append(sorted(panel))
@@ -196,33 +214,51 @@ def _phi(panels: list, d: int) -> dict:
 
 
 def h4a_cells(data: dict, genes: dict, space: dict) -> pd.DataFrame:
+    """Mỗi (cohort, n_T): Φ Nogueira từng nhánh (trung bình k ∈ K_AVG), SE (trung bình SE theo k, cận trên), CI 95 % hai phía;
+    delta, se = MVP − target-only (H4a); delta_vs_pooled, se_vs_pooled = MVP − pooled (mô tả; chỉ ở n_T nơi D3 chạy).
+    select-on-source chỉ báo kèm (panel cố định trong cohort, Φ = 1 theo cấu tạo)."""
     rows = []
     for cohort, (per, _) in data.items():
         for n_t in _levels(per):
-            parts = []
-            for k in K_AVG:
-                a, b = _phi(_panels(per, genes[cohort], n_t, k, "mvp"), space[cohort]), _phi(_panels(per, genes[cohort], n_t, k, "target_only"), space[cohort])
-                parts.append((a, b))
-            pa = np.mean([a["stability"] for a, _ in parts]); pb = np.mean([b["stability"] for _, b in parts])
-            se = float(np.mean([np.sqrt(a["se"] ** 2 + b["se"] ** 2) for a, b in parts]))
-            rows.append({"cohort": cohort, "n_t": n_t, "k_avg": " ".join(map(str, K_AVG)), "n_runs": int(parts[0][0]["M"]), "d": int(space[cohort]),
-                         "phi_mvp": float(pa), "phi_target_only": float(pb), "delta": float(pa - pb), "se": se})
+            stats = {}
+            for arm in H4A_ARMS:
+                parts = [p for p in (_panels(per, genes[cohort], n_t, k, arm) for k in K_AVG)]
+                stats[arm] = [_phi(p, space[cohort]) for p in parts] if all(parts) else None
+            if stats["mvp"] is None or stats["target_only"] is None:
+                raise ValueError(f"{cohort} n_T = {n_t}: thiếu panel MVP hoặc target-only")
+            row = {"cohort": cohort, "n_t": n_t, "k_avg": " ".join(map(str, K_AVG)), "n_runs": int(stats["mvp"][0]["M"]), "d": int(space[cohort])}
+            for arm, st in stats.items():
+                phi = float(np.mean([x["stability"] for x in st])) if st else np.nan
+                se = float(np.mean([x["se"] for x in st])) if st else np.nan
+                row.update({f"phi_{arm}": phi, f"se_{arm}": se, f"ci_low_{arm}": phi - m2.Z975 * se, f"ci_high_{arm}": phi + m2.Z975 * se})
+
+            def diff_se(other):
+                st = stats[other]
+                return float(np.mean([np.sqrt(a["se"] ** 2 + b["se"] ** 2) for a, b in zip(stats["mvp"], st)])) if st else np.nan
+
+            row.update({"delta": row["phi_mvp"] - row["phi_target_only"], "se": diff_se("target_only"),
+                        "delta_vs_pooled": row["phi_mvp"] - row["phi_pooled"], "se_vs_pooled": diff_se("pooled")})
+            rows.append(row)
     return pd.DataFrame(rows)
 
 
 def h4a_pooled(cells: pd.DataFrame) -> pd.DataFrame:
     out = []
     sets = {**m2.POOL_SETS, "all4": tuple(cells.cohort.unique())}
-    for n_t, g in cells.groupby("n_t", sort=False):
-        for name, members in sets.items():
-            sub = g[g.cohort.isin(members)]
-            if len(sub):
-                out.append({"n_t": n_t, "pool_set": name, "cohorts": " ".join(sub.cohort), **m2.pool(sub, 0.0)})
+    for comp, dcol, scol in ((H4A_MAIN, "delta", "se"), (H4A_POOLED, "delta_vs_pooled", "se_vs_pooled")):
+        cc = cells[["cohort", "n_t", dcol, scol]].rename(columns={dcol: "delta", scol: "se"}).dropna()
+        for n_t, g in cc.groupby("n_t", sort=False):
+            for name, members in sets.items():
+                sub = g[g.cohort.isin(members)]
+                if len(sub):
+                    out.append({"comparison": comp, "n_t": n_t, "pool_set": name, "cohorts": " ".join(sub.cohort), **m2.pool(sub, 0.0)})
     return pd.DataFrame(out)
 
 
 def decide_h4a(pooled: pd.DataFrame) -> tuple[str, list]:
     main = pooled[(pooled.pool_set == "gpl570") & pooled.n_t.isin(H4_N_T)]
+    if "comparison" in main:
+        main = main[main.comparison == H4A_MAIN]
     ok = [(r.n_t, bool(r.delta_ivw >= H4A_MIN_DELTA and r.ci95_ivw_low > 0 and r.delta_eq >= H4A_MIN_DELTA and r.ci95_eq_low > 0)) for r in main.itertuples()]
     n_ok = sum(v for _, v in ok)
     outcome = "ung_ho" if ok and n_ok == len(ok) else ("ung_ho_mot_phan" if n_ok else "khong_ung_ho")
