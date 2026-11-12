@@ -36,7 +36,7 @@ def genes_for(per: pd.DataFrame, seed: int = 0, stable_mvp: bool = True) -> pd.D
     return pd.DataFrame(rows)
 
 
-def cohort_data(seed0: int = 10, shift: float = 0.6, arms=("d3", "ihc"), ks=(2, 3, 5), chosen=None) -> dict:
+def cohort_data(seed0: int = 10, shift: float = 0.6, arms=("d3", "ihc"), ks=(2, 3, 4, 5), chosen=None) -> dict:
     return {c: synthetic(cohort=c, n_ts=("5", "10") if c == "gse10245" else ("5", "10", "20"), ks=ks, seed=seed0 + i, mvp_shift=shift,
                          arms=arms, chosen=(chosen or {}).get(c))
             for i, c in enumerate(COHORTS)}

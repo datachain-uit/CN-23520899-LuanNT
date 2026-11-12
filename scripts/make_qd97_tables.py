@@ -14,7 +14,8 @@ không đổi quy tắc hay bảng H2, H2b, H2c đã sinh (QĐ97f). Mọi bảng
     python scripts/make_qd97_tables.py --rq2 rq2_mvp_1b7c021_results.zip --rq4 rq4_h4b_noihc_d74b8c0_results.zip \
         --rq2-tables rq2_tables_198b840_results.zip
 
---rq2-tables (tuỳ chọn): kiểm các ô từng cohort trùng rq2_cells.csv đã nộp (dừng nếu lệch). Đầu ra: results/survey_v2/RQ2_qd97_tables/
+--rq2-tables (tuỳ chọn): kiểm các ô từng cohort trùng rq2_cells.csv đã nộp (dừng nếu lệch). --rq4 (tuỳ chọn, Y90): chỉ bảng (b) cần;
+thiếu thì bỏ qd97b_* và ghi "qd97b_skipped" vào config.json. Đầu ra: results/survey_v2/RQ2_qd97_tables/
 {qd97a_decomposition_cells.csv, qd97a_decomposition_pooled.csv, qd97a_decomposition_by_k_{cells,pooled}.csv (từng k, W4), qd97b_true_vs_shuffled_cells.csv, qd97b_true_vs_shuffled_pooled.csv,
 qd97d_cohort_table.csv, qd97d_secondary_metrics.csv, qd97d_gse42127_by_k.csv, config.json}.
 """
@@ -72,7 +73,7 @@ SHUFFLED = "mvp_shuffled"
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rq2", type=Path, required=True, help="zip của JOB rq2_mvp (hoặc thư mục RQ2_mvp)")
-    ap.add_argument("--rq4", type=Path, required=True, help="zip của JOB rq4_h4b_noihc (dùng RQ2_mvp_shuffled)")
+    ap.add_argument("--rq4", type=Path, default=None, help="zip của JOB rq4_h4b_noihc (dùng RQ2_mvp_shuffled); thiếu thì bỏ bảng (b)")
     ap.add_argument("--rq2-tables", type=Path, default=None, help="zip bảng RQ2 đã nộp (rq2_cells.csv) để kiểm trùng")
     ap.add_argument("--cohorts", nargs="+", default=list(C.FEWSHOT_COHORTS))
     ap.add_argument("--n-boot", type=int, default=C.BOOTSTRAP_N)
@@ -217,27 +218,31 @@ def main(argv=None, script=__file__) -> int:
     t0 = time.time()
     data, report = m2.load_inputs(args.rq2, args.cohorts)
     n_gate = m2.check_gate(report)
-    shuf, _, shuf_cfg = m4.load_variant(args.rq4, "RQ2_mvp_shuffled", args.cohorts)
-    if not all(c.get("source_labels_shuffled") for c in shuf_cfg.values()):
-        raise SystemExit("RQ2_mvp_shuffled không ghi source_labels_shuffled = true")
+    shuf = None
+    if args.rq4 is not None:
+        shuf, _, shuf_cfg = m4.load_variant(args.rq4, "RQ2_mvp_shuffled", args.cohorts)
+        if not all(c.get("source_labels_shuffled") for c in shuf_cfg.values()):
+            raise SystemExit("RQ2_mvp_shuffled không ghi source_labels_shuffled = true")
     opened = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"mở kết quả lúc {opened}", flush=True)
     cohort_tab = cohort_table(data, args.n_boot)
     n_match = check_against_submitted(cohort_tab, args.rq2_tables) if args.rq2_tables else None
     dec = decomposition(data, args.n_boot)
     dec_k = decomposition_by_k(data, args.n_boot)
-    tvs = true_vs_shuffled(data, shuf, args.n_boot)
+    tvs = true_vs_shuffled(data, shuf, args.n_boot) if shuf is not None else None
     sec = secondary_metrics(data)
     byk = cohort_by_k(data, args.n_boot, "gse42127") if "gse42127" in data else pd.DataFrame()
     out = results_dir(args.out)
     tables = {"qd97a_decomposition_cells": dec["cells"], "qd97a_decomposition_pooled": dec["pooled"],
               "qd97a_decomposition_by_k_cells": dec_k["cells"], "qd97a_decomposition_by_k_pooled": dec_k["pooled"],
-              "qd97b_true_vs_shuffled_cells": tvs["cells"], "qd97b_true_vs_shuffled_pooled": tvs["pooled"],
               "qd97d_cohort_table": cohort_tab, "qd97d_secondary_metrics": sec, "qd97d_gse42127_by_k": byk}
+    if tvs is not None:
+        tables.update({"qd97b_true_vs_shuffled_cells": tvs["cells"], "qd97b_true_vs_shuffled_pooled": tvs["pooled"]})
     for name, frame in tables.items():
         frame.to_csv(out / f"{name}.csv", index=False, encoding="utf-8-sig")
     files = [p for p in (args.rq2, args.rq4, args.rq2_tables) if p is not None and p.suffix == ".zip"]
-    cfg = {"experiment": "RQ2_qd97_tables", "rq2_input": str(args.rq2), "rq4_input": str(args.rq4),
+    cfg = {"experiment": "RQ2_qd97_tables", "rq2_input": str(args.rq2), "rq4_input": str(args.rq4) if args.rq4 else None,
+           "qd97b_skipped": "thiếu --rq4: không tính bảng (b)" if args.rq4 is None else None,
            "rq2_tables_input": str(args.rq2_tables) if args.rq2_tables else None, "input_sha256": {p.name: sha256(p) for p in files},
            "cohorts": args.cohorts, "k_avg": list(K_AVG), "mvp_rule": m2.MVP_RULE, "n_boot": args.n_boot, "equality_rows_ok": n_gate,
            "cohort_cells_match_submitted": n_match, "family": DESCRIPTIVE,

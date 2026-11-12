@@ -114,3 +114,33 @@ def test_space_plus_pi_equals_h2_delta_run_by_run():
         for a, b, c in zip(tot, sp, pi):
             assert (a.split, a.subset) == (b.split, b.subset) == (c.split, c.subset)
             assert np.allclose(a.D, b.D + c.D, atol=1e-12)
+
+
+# ------------------------------------------------------------------------------------------------- main() (Y90)
+def _run_main(tmp_path, monkeypatch, with_rq4: bool):
+    import json
+    from rq2_fake_zip import cohort_data, patch_run, write_rq2_zip, write_rq4_zip
+    main = cohort_data()
+    rq2 = write_rq2_zip(tmp_path / "rq2_mvp_fake_results.zip", main)
+    argv = ["--rq2", str(rq2), "--n-boot", "10"]
+    if with_rq4:
+        argv += ["--rq4", str(write_rq4_zip(tmp_path / "rq4_h4b_noihc_fake_results.zip", main))]
+    patch_run(monkeypatch, m, tmp_path / "out")
+    assert m.main(argv) == 0
+    out = tmp_path / "out" / "RQ2_qd97_tables"
+    return {p.stem for p in out.glob("*.csv")}, json.loads((out / "config.json").read_text(encoding="utf-8"))
+
+
+def test_main_writes_every_table_and_config(tmp_path, monkeypatch):
+    names, cfg = _run_main(tmp_path, monkeypatch, with_rq4=True)
+    assert names == {"qd97a_decomposition_cells", "qd97a_decomposition_pooled", "qd97a_decomposition_by_k_cells", "qd97a_decomposition_by_k_pooled",
+                     "qd97b_true_vs_shuffled_cells", "qd97b_true_vs_shuffled_pooled", "qd97d_cohort_table", "qd97d_secondary_metrics",
+                     "qd97d_gse42127_by_k"}
+    assert cfg["commit_hash"] == "test000" and cfg["qd97b_skipped"] is None and len(cfg["input_sha256"]) == 2
+    assert cfg["results_opened_at_utc"].endswith("UTC")
+
+
+def test_main_without_rq4_skips_table_b_and_says_so(tmp_path, monkeypatch):
+    names, cfg = _run_main(tmp_path, monkeypatch, with_rq4=False)
+    assert not any(n.startswith("qd97b_") for n in names) and "qd97a_decomposition_by_k_cells" in names
+    assert cfg["rq4_input"] is None and cfg["qd97b_skipped"]
