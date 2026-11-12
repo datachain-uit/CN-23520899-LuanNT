@@ -48,12 +48,10 @@ def _genes(per: pd.DataFrame, n_genes=40, seed=0, stable_mvp=True):
 
 
 # ------------------------------------------------------------------------------------------------- phân rã, ablation
-def test_decomposition_point_estimates_add_up_to_mvp_minus_target_only():
-    data = _data()
-    t = m.ablation_tables(data, n_boot=30)["cells"].set_index(["cohort", "n_t", "comparison"]).delta
-    for (c, n_t, comp), v in t.items():
-        if comp == "decomp_total":
-            assert v == pytest.approx(t[(c, n_t, "decomp_space")] + t[(c, n_t, "decomp_pi")], abs=1e-12)
+def test_ablation_no_longer_holds_decomposition_rows_y89():
+    """Y89: phân rã chính thức là qd97a (make_qd97_tables.py); bảng ablation không còn decomp_*."""
+    cells = m.ablation_tables(_data(), n_boot=10)["cells"]
+    assert not any(c.startswith("decomp_") for c in cells.comparison.unique())
 
 
 def test_ablation_includes_gamma_rules_and_fixed_gammas_against_m5_pos():
@@ -144,3 +142,75 @@ def test_h4a_reports_each_arm_with_ci_and_pooled_comparison_only_where_d3_ran():
     assert set(pooled[pooled.comparison == "mvp_vs_pooled"].n_t) == {"5", "10"}
     out, levels = m.decide_h4a(pooled)                                    # quyết định chỉ dùng mvp_vs_target_only
     assert [n for n, _ in levels] == ["5", "10"]
+
+
+# ------------------------------------------------------------------------------------------------- W2 (QĐ125): TO_nguồn, select-on-source, bootstrap theo split
+def test_phi_compact_equals_nogueira_on_full_gene_space():
+    rng = np.random.default_rng(3)
+    d = 40
+    panels = [sorted(rng.choice(d, size=3, replace=False)) for _ in range(12)]
+    full = np.zeros((12, d))
+    for i, p in enumerate(panels):
+        full[i, p] = 1
+    used = sorted(set().union(*map(set, panels)))
+    assert m.phi_compact(full[:, used], d) == pytest.approx(m.nogueira(full)["stability"], abs=1e-12)
+
+
+def test_h4a_has_to_source_arm_and_select_on_source_without_ci():
+    from rq2_fake_zip import cohort_data, genes_for
+    data = cohort_data()
+    genes = {c: genes_for(data[c][0], seed=i) for i, c in enumerate(COHORTS)}
+    cells = m.h4a_cells(data, genes, {c: 40 for c in COHORTS})
+    r = cells[(cells.cohort == "gse30219") & (cells.n_t == "5")].iloc[0]
+    assert {"phi_to_source", "se_to_source", "ci_low_to_source"} <= set(cells.columns)
+    assert r.phi_to_source < 0.6 and r.se_to_source > 0                       # γ = 0 / source: gen ngẫu nhiên trong dữ liệu giả
+    assert r.phi_select_on_source == pytest.approx(1.0) and np.isnan(r.se_select_on_source) and np.isnan(r.ci_low_select_on_source)
+    assert bool(r.sos_panel_constant)
+
+
+def test_to_source_panels_come_from_gamma_zero_source_rows():
+    from rq2_fake_zip import cohort_data, genes_for
+    per = cohort_data()["gse30219"][0]
+    genes = genes_for(per, seed=1)
+    got = m.panels_by_run(per, genes, "5", 3, m.TO_SOURCE)
+    g = genes[(genes.n_t == "5") & (genes.k == 3) & (genes.gamma == 0) & (genes.prefilter_space == "source")]
+    want = [(s, b, sorted(x.gene)) for (s, b), x in g.groupby(["split", "subset"])]
+    assert got == want and len(got) == 4
+
+
+def test_split_bootstrap_is_reproducible_paired_and_keeps_subsets_together():
+    from rq2_fake_zip import cohort_data, genes_for
+    data = cohort_data()
+    genes = {c: genes_for(data[c][0], seed=i) for i, c in enumerate(COHORTS)}
+    a = m.h4a_cells(data, genes, {c: 40 for c in COHORTS}, n_boot=50)
+    b = m.h4a_cells(data, genes, {c: 40 for c in COHORTS}, n_boot=50)
+    pd.testing.assert_frame_equal(a, b)
+    r = a[(a.cohort == "gse30219") & (a.n_t == "5")].iloc[0]
+    assert r.boot_low_mvp == pytest.approx(1.0) and r.boot_low_target_only <= r.phi_target_only + 0.2 <= r.boot_high_target_only + 0.4
+    assert r.boot_low <= r.delta <= r.boot_high or r.boot_high - r.boot_low < 1e-9
+    assert "boot_low_select_on_source" not in a.columns and r.boot_seed == m.m2.cell_seed("w2split", "gse30219", "5", 2, 3, 5)
+    runs = {"x": {2: [(0, 0, ["A", "B"]), (0, 1, ["A", "B"]), (1, 0, ["C", "D"]), (1, 1, ["C", "D"])]}}
+    v = m.split_bootstrap(runs, d=10, n_boot=200, seed=1)["x"]
+    # mỗi vòng lấy nguyên split: hoặc cả hai split giống nhau (Φ = 1) hoặc mỗi split một lần (Φ của bộ gốc)
+    base = m.phi_compact(np.array([[1, 1, 0, 0], [1, 1, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1]], float), 10)
+    assert set(np.round(v, 12)) <= {1.0, round(base, 12)}
+
+
+def test_main_writes_every_table_and_config(tmp_path, monkeypatch):
+    """Y90: main() trên zip giả nhỏ, kiểm tên tệp đầu ra và config.json."""
+    import json
+    from rq2_fake_zip import cohort_data, patch_run, write_rq2_zip, write_rq4_zip
+    main = cohort_data()
+    rq2 = write_rq2_zip(tmp_path / "rq2_mvp_fake_results.zip", main)
+    rq4 = write_rq4_zip(tmp_path / "rq4_h4b_noihc_fake_results.zip", main)
+    patch_run(monkeypatch, m, tmp_path / "out")
+    assert m.main(["--rq2", str(rq2), "--rq4", str(rq4), "--n-boot", "10"]) == 0
+    out = tmp_path / "out" / "RQ4_tables"
+    want = {"rq4_h4b_cells", "rq4_h4b_pooled", "rq4_h4a_cells", "rq4_h4a_pooled", "rq4_decisions", "rq2_ablation_cells", "rq2_ablation_pooled",
+            "rq2_noihc_cells", "rq2_noihc_pooled", "rq2_gamma_distribution"}
+    assert {p.stem for p in out.glob("*.csv")} == want
+    cfg = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert cfg["commit_hash"] == "test000" and cfg["rq2_input_sha256"] and cfg["results_opened_at_utc"].endswith("UTC")
+    assert "to_source" in cfg["h4a_arms"] and "w2split" in cfg["h4a_split_bootstrap"]
+    h4a = pd.read_csv(out / "rq4_h4a_cells.csv", encoding="utf-8-sig")
+    assert {"phi_to_source", "boot_low_to_source", "boot_low", "boot_high"} <= set(h4a.columns)

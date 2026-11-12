@@ -4,14 +4,19 @@ Dùng chung máy bootstrap hai tầng, ghép cặp và gộp của scripts/make_
 
 H4b (chỉ báo cáo, M3): MVP với π từ TCGA xáo nhãn (RQ2_mvp_shuffled) so với target-only trong cùng lần chạy; biên 0,01 như H2c; gộp IVW và
   trọng số bằng nhau (GPL570; 4 cohort là độ nhạy); cận dưới một phía 95 % ≤ −0,01 thì ghi "không chứng minh được không thua kém".
-H4a: độ ổn định Nogueira (survey_v2.stability.nogueira, cùng mã với E4) của panel MVP, target-only, pooled (và select-on-source, chỉ báo kèm;
-  QĐ97c) qua 20 lần chạy mỗi (cohort, n_T, k), CI 95 % từng nhánh; quyết định chỉ theo MVP − target-only, MVP − pooled là mô tả;
+H4a: độ ổn định Nogueira (survey_v2.stability.nogueira, cùng mã với E4) của panel MVP, target-only, TO_nguồn (γ = 0 trên không gian gen
+  của nguồn), pooled và select-on-source qua 20 lần chạy mỗi (cohort, n_T, k), CI 95 % từng nhánh (W2, QĐ125). select-on-source: Φ = 1 theo
+  cấu tạo (panel cố định trong cohort), không CI, không làm đối chứng (QĐ97c); cột sos_panel_constant kiểm điều đó trên dữ liệu.
+  Quyết định chỉ theo MVP − target-only, MVP − pooled là mô tả;
   d = cỡ không gian gen G. LỰA CHỌN CÀI ĐẶT (KBTN chưa nêu, cần GVHD xác nhận): Δ = Φ(MVP) − Φ(TO) lấy trung bình k ∈ {2, 3, 5};
   SE của hiệu = √(SE²_MVP + SE²_TO) theo phương sai tiệm cận của Nogueira (bảo thủ: bỏ qua tương quan dương giữa hai nhánh), SE của trung
   bình theo k = trung bình các SE (cận trên); gộp IVW và trọng số bằng nhau qua GPL570; một mức n_T ≤ 20 đạt khi Δ ≥ 0,1 và CI 95 % hai
   phía không chứa 0 theo cả hai bản gộp. Ủng hộ: đạt ở cả 3 mức; một phần: ở một số mức; không ủng hộ: không mức nào.
-Ablation (mô tả, không kiểm định): phân rã MVP − TO = (TO_nguồn − TO) + (MVP − TO_nguồn) với TO_nguồn = γ = 0 trên không gian gen của nguồn;
-  m5_cv − m5_pos; từng γ cố định − m5_pos; loại 4 gen IHC (RQ2_mvp_noIHC − RQ2_mvp, cho MVP và target-only). Phân bố γ được chọn.
+  Độ nhạy (W2): CI 95 % bootstrap theo split, phân vị 2,5 / 97,5: mỗi vòng lấy lại các split có hoàn lại, giữ nguyên 4 tập con của mỗi
+  split, tính lại Φ (trung bình k ∈ {2, 3, 5}) cho mọi nhánh trên cùng các split (ghép cặp); khoá seed "w2split"; cột boot_*. Quy tắc đạt
+  không đổi.
+Ablation (mô tả, không kiểm định): m5_cv − m5_pos; từng γ cố định − m5_pos; loại 4 gen IHC (RQ2_mvp_noIHC − RQ2_mvp, cho MVP và
+  target-only). Phân bố γ được chọn. Phân rã MVP − TO không còn ở đây (Y89): bảng chính thức là qd97a của scripts/make_qd97_tables.py.
 
     python scripts/make_rq4_tables.py --rq2 rq2_mvp_1b7c021_results.zip --rq4 rq4_h4b_noihc_d74b8c0_results.zip
 
@@ -58,10 +63,7 @@ H4A_MIN_DELTA = 0.1
 M3_NOTE = "không chứng minh được không thua kém"
 DESCRIPTIVE = "mô tả (ablation; không kiểm định)"
 TO_SOURCE = "mvp|fixed|0|source"
-ABLATION = [  # (tên, nhánh a, nhánh b): Δ = a − b
-    ("decomp_total", "mvp", "target_only"),
-    ("decomp_space", TO_SOURCE, "target_only"),
-    ("decomp_pi", "mvp", TO_SOURCE),
+ABLATION = [  # (tên, nhánh a, nhánh b): Δ = a − b; phân rã ở make_qd97_tables.py (qd97a, Y89)
     ("m5_cv_vs_m5_pos", "mvp|m5_cv||", "mvp"),
     ("gamma_0.5_vs_m5_pos", "mvp|fixed|0.5|source", "mvp"),
     ("gamma_1_vs_m5_pos", "mvp|fixed|1|source", "mvp"),
@@ -170,11 +172,30 @@ def h4b_tables(shuffled: dict, n_boot: int) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------- H4a
-H4A_ARMS = ("mvp", "target_only", "pooled", "select_on_source")
+SOS = "select_on_source"
+H4A_ARMS = ("mvp", "target_only", TO_SOURCE, "pooled", SOS)
+ARM_LABEL = {TO_SOURCE: "to_source"}                             # tên cột: phi_to_source, se_to_source, ...
 H4A_MAIN, H4A_POOLED = "mvp_vs_target_only", "mvp_vs_pooled"     # quyết định H4a chỉ theo mvp_vs_target_only; mvp_vs_pooled mô tả (QĐ97c)
+SPLIT_BOOT_TAG = "w2split"
+
+
+def label(arm: str) -> str:
+    return ARM_LABEL.get(arm, arm)
 
 
 def _arm_select(per: pd.DataFrame, arm: str) -> pd.DataFrame:
+    if "|" in arm:                                               # "method|gamma_rule|gamma|prefilter_space", ô trống = không lọc
+        method, rule, gamma, space = (arm.split("|") + ["", "", "", ""])[:4]
+        sel = pd.Series(True, index=per.index)
+        if method:
+            sel &= per.method == method
+        if rule:
+            sel &= per.gamma_rule == rule
+        if gamma != "":
+            sel &= per.gamma.fillna(-1.0).astype(float) == float(gamma)
+        if space:
+            sel &= per.prefilter_space == space
+        return per[sel]
     if arm == "mvp":
         return per[(per.method == "mvp") & (per.gamma_rule == m2.MVP_RULE)]
     if arm == "target_only":
@@ -182,16 +203,22 @@ def _arm_select(per: pd.DataFrame, arm: str) -> pd.DataFrame:
     return per[per.method == arm]
 
 
-def _panels(per: pd.DataFrame, genes: pd.DataFrame, n_t: str, k: int, arm: str) -> list:
-    """Danh sách panel (tập gen) của nhánh qua các lần chạy; [] nếu nhánh không chạy ở (n_T, k). MVP lấy panel của dòng fixed đúng γ,
-    không gian gen mà dòng m5_pos ghi; pooled, select-on-source lấy panel của chính phương pháp đó."""
+def _arm_method(arm: str) -> str:
+    if "|" in arm:
+        return arm.split("|")[0]
+    return "mvp" if arm in ("mvp", "target_only") else arm
+
+
+def panels_by_run(per: pd.DataFrame, genes: pd.DataFrame, n_t: str, k: int, arm: str) -> list:
+    """[(split, subset, panel)] của nhánh qua các lần chạy, xếp theo (split, subset); [] nếu nhánh không chạy ở (n_T, k). MVP lấy panel
+    của dòng fixed đúng γ, không gian gen mà dòng m5_pos ghi; TO_nguồn là dòng γ = 0 / source; pooled, select-on-source lấy panel của chính
+    phương pháp đó."""
     per = per.copy(); genes = genes.copy()
     per["n_t"] = per.n_t.astype(str); genes["n_t"] = genes.n_t.astype(str)
     rows = _arm_select(per[(per.n_t == n_t) & (per.k == k)], arm)
     if rows.empty:
         return []
-    method = "mvp" if arm in ("mvp", "target_only") else arm
-    g = genes[(genes.n_t == n_t) & (genes.k == k) & (genes.method == method)].copy()
+    g = genes[(genes.n_t == n_t) & (genes.k == k) & (genes.method == _arm_method(arm))].copy()
     g["gamma_key"] = g.gamma.fillna(-1.0).astype(float)
     groups = {key: set(x.gene) for key, x in g.groupby(["split", "subset", "gamma_key", "prefilter_space"])}
     out = []
@@ -200,8 +227,12 @@ def _panels(per: pd.DataFrame, genes: pd.DataFrame, n_t: str, k: int, arm: str) 
         panel = groups.get((r.split, r.subset, gk, r.prefilter_space))
         if panel is None or len(panel) != k:
             raise ValueError(f"n_T = {n_t}, k = {k}: thiếu panel {arm} ở (split {r.split}, subset {r.subset})")
-        out.append(sorted(panel))
+        out.append((int(r.split), int(r.subset), sorted(panel)))
     return out
+
+
+def _panels(per: pd.DataFrame, genes: pd.DataFrame, n_t: str, k: int, arm: str) -> list:
+    return [p for _, _, p in panels_by_run(per, genes, n_t, k, arm)]
 
 
 def _phi(panels: list, d: int) -> dict:
@@ -213,24 +244,74 @@ def _phi(panels: list, d: int) -> dict:
     return nogueira(Z)
 
 
-def h4a_cells(data: dict, genes: dict, space: dict) -> pd.DataFrame:
+def phi_compact(Zc: np.ndarray, d: int) -> float:
+    """Φ Nogueira từ ma trận chỉ gồm các cột gen có xuất hiện (cột toàn 0 không đóng góp vào Σ p(1 − p) hay k̄); bằng nogueira() trên đủ
+    d cột."""
+    M = Zc.shape[0]
+    p = Zc.mean(axis=0)
+    kbar = p.sum()
+    denom = (kbar / d) * (1 - kbar / d)
+    if M < 2 or denom == 0:
+        return np.nan
+    return float(1 - (M / (M - 1)) * (np.sum(p * (1 - p)) / d) / denom)
+
+
+def split_bootstrap(runs: dict, d: int, n_boot: int, seed: int) -> dict:
+    """runs = {arm: {k: [(split, subset, panel)]}}. Mỗi vòng lấy lại các split có hoàn lại (giữ nguyên các tập con của split), dùng chung
+    cho mọi nhánh và mọi k; trả {arm: mảng n_boot giá trị Φ trung bình theo k}."""
+    splits = sorted({s for per_k in runs.values() for lst in per_k.values() for s, _, _ in lst})
+    draws = np.random.default_rng(seed).integers(0, len(splits), size=(n_boot, len(splits)))
+    out = {}
+    for arm, per_k in runs.items():
+        vals = np.zeros(n_boot)
+        for lst in per_k.values():
+            universe = sorted(set().union(*[set(p) for _, _, p in lst]))
+            idx = {g: j for j, g in enumerate(universe)}
+            Z = np.zeros((len(lst), len(universe)), dtype=float)
+            for i, (_, _, p) in enumerate(lst):
+                Z[i, [idx[g] for g in p]] = 1
+            rows_of = [np.array([i for i, (ss, _, _) in enumerate(lst) if ss == s], dtype=int) for s in splits]
+            for b in range(n_boot):
+                vals[b] += phi_compact(Z[np.concatenate([rows_of[j] for j in draws[b]])], d)
+        out[arm] = vals / len(per_k)
+    return out
+
+
+def _q(x: np.ndarray, q: float) -> float:
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    return float(np.quantile(x, q)) if len(x) else np.nan
+
+
+def arm_panels(per: pd.DataFrame, genes: pd.DataFrame, n_t: str, arms=None) -> dict:
+    """{arm: {k: [(split, subset, panel)]}} cho các nhánh có panel ở mọi k ∈ K_AVG."""
+    out = {}
+    for arm in arms or H4A_ARMS:
+        parts = {k: panels_by_run(per, genes, n_t, k, arm) for k in K_AVG}
+        if all(parts.values()):
+            out[arm] = parts
+    return out
+
+
+def h4a_cells(data: dict, genes: dict, space: dict, n_boot: int = 0) -> pd.DataFrame:
     """Mỗi (cohort, n_T): Φ Nogueira từng nhánh (trung bình k ∈ K_AVG), SE (trung bình SE theo k, cận trên), CI 95 % hai phía;
     delta, se = MVP − target-only (H4a); delta_vs_pooled, se_vs_pooled = MVP − pooled (mô tả; chỉ ở n_T nơi D3 chạy).
-    select-on-source chỉ báo kèm (panel cố định trong cohort, Φ = 1 theo cấu tạo)."""
+    select-on-source: Φ báo kèm, không SE / CI (Φ = 1 theo cấu tạo; sos_panel_constant = mọi panel của ô trùng nhau ở mọi k).
+    n_boot > 0: thêm boot_low_*, boot_high_* (bootstrap theo split, W2) cho từng nhánh trừ select-on-source và cho hai hiệu."""
     rows = []
     for cohort, (per, _) in data.items():
         for n_t in _levels(per):
-            stats = {}
-            for arm in H4A_ARMS:
-                parts = [p for p in (_panels(per, genes[cohort], n_t, k, arm) for k in K_AVG)]
-                stats[arm] = [_phi(p, space[cohort]) for p in parts] if all(parts) else None
-            if stats["mvp"] is None or stats["target_only"] is None:
+            runs = arm_panels(per, genes[cohort], n_t)
+            if "mvp" not in runs or "target_only" not in runs:
                 raise ValueError(f"{cohort} n_T = {n_t}: thiếu panel MVP hoặc target-only")
+            stats = {arm: ([_phi([p for _, _, p in runs[arm][k]], space[cohort]) for k in K_AVG] if arm in runs else None) for arm in H4A_ARMS}
             row = {"cohort": cohort, "n_t": n_t, "k_avg": " ".join(map(str, K_AVG)), "n_runs": int(stats["mvp"][0]["M"]), "d": int(space[cohort])}
             for arm, st in stats.items():
+                lab = label(arm)
                 phi = float(np.mean([x["stability"] for x in st])) if st else np.nan
-                se = float(np.mean([x["se"] for x in st])) if st else np.nan
-                row.update({f"phi_{arm}": phi, f"se_{arm}": se, f"ci_low_{arm}": phi - m2.Z975 * se, f"ci_high_{arm}": phi + m2.Z975 * se})
+                se = float(np.mean([x["se"] for x in st])) if st and arm != SOS else np.nan
+                row.update({f"phi_{lab}": phi, f"se_{lab}": se, f"ci_low_{lab}": phi - m2.Z975 * se, f"ci_high_{lab}": phi + m2.Z975 * se})
+            row["sos_panel_constant"] = (all(len({tuple(p) for _, _, p in lst}) == 1 for lst in runs[SOS].values()) if SOS in runs else np.nan)
 
             def diff_se(other):
                 st = stats[other]
@@ -238,6 +319,19 @@ def h4a_cells(data: dict, genes: dict, space: dict) -> pd.DataFrame:
 
             row.update({"delta": row["phi_mvp"] - row["phi_target_only"], "se": diff_se("target_only"),
                         "delta_vs_pooled": row["phi_mvp"] - row["phi_pooled"], "se_vs_pooled": diff_se("pooled")})
+            if n_boot:
+                seed = m2.cell_seed(SPLIT_BOOT_TAG, cohort, n_t, *K_AVG)
+                bs = split_bootstrap({a: r for a, r in runs.items() if a != SOS}, space[cohort], n_boot, seed)
+                for arm in H4A_ARMS:
+                    if arm != SOS:
+                        v = bs.get(arm)
+                        row.update({f"boot_low_{label(arm)}": _q(v, 0.025) if v is not None else np.nan,
+                                    f"boot_high_{label(arm)}": _q(v, 0.975) if v is not None else np.nan})
+                to_pool = bs["mvp"] - bs["pooled"] if "pooled" in bs else None
+                row.update({"boot_low": _q(bs["mvp"] - bs["target_only"], 0.025), "boot_high": _q(bs["mvp"] - bs["target_only"], 0.975),
+                            "boot_low_vs_pooled": _q(to_pool, 0.025) if to_pool is not None else np.nan,
+                            "boot_high_vs_pooled": _q(to_pool, 0.975) if to_pool is not None else np.nan,
+                            "boot_n": int(n_boot), "boot_seed": int(seed)})
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -292,7 +386,7 @@ def main(argv=None, script=__file__) -> int:
     print(f"mở kết quả RQ4 lúc {opened}", flush=True)
     space = {c: int(main_cfg[c]["gene_space_size"]) for c in args.cohorts}
     h4b = h4b_tables(shuf, args.n_boot)
-    h4a_c = h4a_cells(main_data, main_genes, space)
+    h4a_c = h4a_cells(main_data, main_genes, space, n_boot=args.n_boot)
     h4a_p = h4a_pooled(h4a_c)
     outcome, levels = decide_h4a(h4a_p)
     abl = ablation_tables(main_data, args.n_boot)
@@ -316,7 +410,10 @@ def main(argv=None, script=__file__) -> int:
            "cohorts": args.cohorts, "k_avg": list(K_AVG), "mvp_rule": m2.MVP_RULE, "n_boot": args.n_boot, "equality_rows_ok": n_gate,
            "h4b_margin": MARGIN_H4B, "h4a_min_delta": H4A_MIN_DELTA, "h4_n_t": list(H4_N_T),
            "h4a_choices": "Φ Nogueira trên 20 panel mỗi (cohort, n_T, k), d = gene_space_size; Δ trung bình k ∈ {2, 3, 5}; SE = √(SE²_MVP + SE²_TO), trung bình theo k "
-                          "(bảo thủ); gộp IVW và trọng số bằng nhau; đạt khi Δ ≥ 0,1 và CI 95 % hai phía > 0 ở cả hai bản gộp. Cần GVHD xác nhận",
+                          "(bảo thủ); gộp IVW và trọng số bằng nhau; đạt khi Δ ≥ 0,1 và CI 95 % hai phía > 0 ở cả hai bản gộp (QĐ125 duyệt W2)",
+           "h4a_arms": [label(a) for a in H4A_ARMS], "h4a_select_on_source": "Φ = 1 theo cấu tạo, không SE / CI, không làm đối chứng (QĐ97c)",
+           "h4a_split_bootstrap": f"độ nhạy W2: lấy lại split có hoàn lại, giữ 4 tập con, {args.n_boot} vòng, khoá seed {SPLIT_BOOT_TAG!r}, "
+                                  "phân vị 2,5 / 97,5",
            "gene_space_size": space, "shuffle_seeds": {c: v.get("shuffle_seed") for c, v in shuf_cfg.items()},
            "noihc_excluded": {c: v.get("excluded_genes") for c, v in noihc_cfg.items()}, "results_opened_at_utc": opened,
            "elapsed_s": time.time() - t0, "versions": all_versions()}
