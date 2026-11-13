@@ -86,12 +86,17 @@ def parse_args(argv=None):
     ap.add_argument("--out", default="RQ2_mvp")
     ap.add_argument("--early-tcga", action="store_true", help="thử nghiệm sớm PC-04 trên TCGA (nguồn giả / đích giả); bỏ qua --datasets")
     ap.add_argument("--shuffle-source-labels", action="store_true",
-                    help="H4b (RQ4): π tính trên TCGA với nhãn xáo, một hoán vị cố định mỗi cohort (seed_for(cid, 0, 0, 21)); chỉ nhánh mvp")
+                    help="H4b (RQ4): π tính trên TCGA với nhãn xáo, một hoán vị cố định mỗi cohort (seed_for(cid, 0, 0, 21)); "
+                         "nhánh mvp, hoặc d3 cho đối chứng âm QĐ182 (cùng hoán vị)")
     ap.add_argument("--exclude-genes", nargs="+", default=None,
                     help="ablation RQ2: loại các gen này khỏi nguồn và đích trước mọi bước (vd. 4 gen IHC); chỉ nhánh mvp")
     args = ap.parse_args(argv)
-    if (args.shuffle_source_labels or args.exclude_genes) and args.arms != ["mvp"]:
-        ap.error("--shuffle-source-labels / --exclude-genes chỉ dùng với --arms mvp (nhánh đối chứng của các biến thể này không có nghĩa)")
+    if args.exclude_genes and args.arms != ["mvp"]:
+        ap.error("--exclude-genes chỉ dùng với --arms mvp (nhánh đối chứng của biến thể này không có nghĩa)")
+    # QĐ182 (Review 12/11): đối chứng âm cho chuyển giao đơn giản — d3 (select_on_source, pooled) với đúng hoán vị nhãn nguồn của
+    # RQ2_mvp_shuffled. IHC không đọc nguồn nên không có nghĩa dưới nhãn xáo.
+    if args.shuffle_source_labels and not set(args.arms) <= {"mvp", "d3"}:
+        ap.error("--shuffle-source-labels chỉ dùng với --arms mvp và/hoặc d3 (QĐ182); nhánh ihc không đọc nguồn")
     if args.early_tcga and (args.shuffle_source_labels or args.exclude_genes):
         ap.error("--early-tcga không dùng cùng --shuffle-source-labels / --exclude-genes")
     if args.early_tcga and (args.gamma_rule != "cv" or 0.0 not in args.gamma):

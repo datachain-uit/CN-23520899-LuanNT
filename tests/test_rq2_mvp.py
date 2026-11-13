@@ -590,6 +590,53 @@ def test_variants_accept_only_the_mvp_arm():
         assert args.arms == ["mvp"]
 
 
+def test_shuffle_also_accepts_the_d3_arm_qd182():
+    """QĐ182: --shuffle-source-labels nhận --arms d3 (và mvp d3); không nhận ihc. --exclude-genes vẫn chỉ mvp."""
+    mvp = _load("run_rq2_mvp")
+    assert mvp.parse_args(["--datasets", COHORT, "--arms", "d3", "--shuffle-source-labels"]).arms == ["d3"]
+    assert mvp.parse_args(["--datasets", COHORT, "--arms", "mvp", "d3", "--shuffle-source-labels"]).arms == ["mvp", "d3"]
+    for arms in (["ihc"], ["d3", "ihc"]):
+        with pytest.raises(SystemExit):
+            mvp.parse_args(["--datasets", COHORT, "--arms", *arms, "--shuffle-source-labels"])
+    with pytest.raises(SystemExit):
+        mvp.parse_args(["--datasets", COHORT, "--arms", "d3", "--exclude-genes", "KRT5"])
+
+
+def test_main_d3_shuffled_uses_the_permutation_of_mvp_shuffled(data_root):
+    """QĐ182: nhánh d3 dưới nhãn xáo dùng đúng hoán vị của RQ2_mvp_shuffled (cùng seed, cùng nhãn, cùng π), và khác d3 với nhãn thật."""
+    mvp = _load("run_rq2_mvp")
+    from survey_v2 import config as C
+    from survey_v2.data import load_dataset
+    common = ["--datasets", COHORT, "--k", "2", "5", "--gamma", "0", "1", "--n-t", "5", "10", "--prefilter", str(PREFILTER), "--save-scores"]
+    mvp.main([*common, "--arms", "mvp", "--shuffle-source-labels", "--out", "RQ2_qd182_mvp_shuf"])
+    mvp.main([*common, "--arms", "d3", "--shuffle-source-labels", "--out", "RQ2_qd182_d3_shuf"])
+    mvp.main([*common, "--arms", "d3", "--out", "RQ2_qd182_d3_real"])
+    root = data_root / "results" / "survey_v2"
+    cfg = {d: json.loads((root / d / COHORT / "config.json").read_text(encoding="utf-8"))
+           for d in ("RQ2_qd182_mvp_shuf", "RQ2_qd182_d3_shuf", "RQ2_qd182_d3_real")}
+    a, b = cfg["RQ2_qd182_mvp_shuf"], cfg["RQ2_qd182_d3_shuf"]
+    assert b["source_labels_shuffled"] is True and b["arms"] == ["d3"]
+    assert b["shuffle_seed"] == a["shuffle_seed"] == C.seed_for(C.cohort_id(COHORT), 0, 0, mvp.SHUFFLE_SEED_TAG)
+    assert b["shuffle_label_agreement"] == a["shuffle_label_agreement"] and b["shuffle_rule"] == a["shuffle_rule"]
+    assert "source_labels_shuffled" not in cfg["RQ2_qd182_d3_real"]
+    # Cùng nhãn xáo ⇒ cùng π trên nguồn (π chỉ phụ thuộc nguồn và nhãn nguồn)
+    pi_a, pi_b = (pd.read_csv(root / d / COHORT / "rq2_source_pi.csv") for d in ("RQ2_qd182_mvp_shuf", "RQ2_qd182_d3_shuf"))
+    pd.testing.assert_frame_equal(pi_a, pi_b)
+    # Nhãn của nguồn trong d3 xáo đúng là hoán vị của shuffled_source
+    source = load_dataset(data_root, C.SOURCE_DATASET, gene_space=None)
+    shuf, _ = mvp.shuffled_source(source, C.cohort_id(COHORT))
+    assert np.array_equal(shuf.y, np.random.default_rng(b["shuffle_seed"]).permutation(source.y))
+    per = {d: pd.read_csv(root / d / COHORT / "rq2_mvp_per_run.csv", dtype={"n_t": str}) for d in ("RQ2_qd182_d3_shuf", "RQ2_qd182_d3_real")}
+    for f in per.values():
+        assert set(f.method) == {"select_on_source", "pooled"} and set(f.gamma_rule) == {"none"}
+    key = ["split", "subset", "n_t", "method", "k"]
+    s, r = (per[d].set_index(key).sort_index() for d in ("RQ2_qd182_d3_shuf", "RQ2_qd182_d3_real"))
+    assert s.index.equals(r.index)
+    genes = {d: pd.read_csv(root / d / COHORT / "rq2_mvp_selected_genes.csv") for d in ("RQ2_qd182_d3_shuf", "RQ2_qd182_d3_real")}
+    sos = lambda g: sorted(g.loc[g.method == "select_on_source"].gene.unique())  # noqa: E731
+    assert sos(genes["RQ2_qd182_d3_shuf"]) != sos(genes["RQ2_qd182_d3_real"])
+
+
 def test_main_shuffled_source_changes_pi_but_not_target_only(data_root):
     """H4b: π từ nguồn xáo nhãn khác π thật; target-only (γ = 0 trên L_T) không đọc nguồn nên trùng lần chạy thường từng giá trị."""
     mvp = _load("run_rq2_mvp")

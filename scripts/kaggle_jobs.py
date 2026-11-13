@@ -269,6 +269,13 @@ def build_jobs() -> dict[str, Job]:
                  [["scripts/run_rq2_mvp.py", *mvp_grid, "--shuffle-source-labels", "--out", "RQ2_mvp_shuffled"],
                   ["scripts/run_rq2_mvp.py", *mvp_grid, "--exclude-genes", *IHC_GENES, "--out", "RQ2_mvp_noIHC"]],
                  [f"RQ2_mvp_shuffled/{d}" for d in GEO] + [f"RQ2_mvp_noIHC/{d}" for d in GEO], parallel=2, hours="4–6"))
+    # ----------------------------------------------------------------- QĐ182 (Review 12/11, QĐ190): đối chứng âm cho chuyển giao đơn giản
+    J.append(Job("qd182_d3_shuffled", "QĐ182 · 14/11", "Đối chứng âm (thăm dò): select-on-source và pooled với đúng hoán vị nhãn nguồn của "
+                 "RQ2_mvp_shuffled (shuffled_source, SHUFFLE_SEED_TAG = 21), bốn cohort, n_T ∈ {5, 10, 20}, k ∈ {2, 3, 4, 5, 10}. "
+                 "Chỉ nhánh d3; không cần khôi phục output",
+                 [["scripts/run_rq2_mvp.py", "--datasets", *GEO, "--k", "2", "3", "4", "5", "10", "--n-t", "5", "10", "20",
+                   "--arms", "d3", "--shuffle-source-labels", "--save-scores", "--n-jobs", "4", "--out", "RQ2_d3_shuffled"]],
+                 [f"RQ2_d3_shuffled/{d}" for d in GEO], parallel=1, hours="~1"))
     return {j.name: j for j in J}
 
 

@@ -375,3 +375,14 @@ def test_rq4_h4b_noihc_job_runs_two_mvp_variants_on_the_rq2_grid():
     assert shuf.shuffle_source_labels and shuf.out == "RQ2_mvp_shuffled" and shuf.exclude_genes is None
     assert noihc.exclude_genes == list(kj.IHC_GENES) and noihc.out == "RQ2_mvp_noIHC" and not noihc.shuffle_source_labels
     assert job.restore_from == [] and job.requires == [] and job.parallel == 2
+
+
+def test_qd182_job_runs_d3_with_the_rq4_shuffle_on_the_e7_grid():
+    job = kj.JOBS["qd182_d3_shuffled"]
+    assert len(job.shards) == 1
+    a = _load(REPO / job.shards[0][0]).parse_args(job.shards[0][1:])
+    assert a.arms == ["d3"] and a.shuffle_source_labels and a.exclude_genes is None and a.out == "RQ2_d3_shuffled"
+    assert a.datasets == list(kj.GEO) and a.k == [2, 3, 4, 5, 10] and a.n_t == ["5", "10", "20"] and a.save_scores
+    rq4 = _load(REPO / kj.JOBS["rq4_h4b_noihc"].shards[0][0]).parse_args(kj.JOBS["rq4_h4b_noihc"].shards[0][1:])
+    assert rq4.shuffle_source_labels and rq4.datasets == a.datasets and rq4.source == a.source   # cùng nguồn, cùng hoán vị mỗi cohort
+    assert job.outputs == [f"RQ2_d3_shuffled/{d}" for d in kj.GEO] and job.restore_from == [] and job.requires == []

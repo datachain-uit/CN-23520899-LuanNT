@@ -186,6 +186,16 @@ EXPERIMENTS = [
         "Một phiên, hai tiến trình song song, không cần khôi phục output. Kaggle Input: **experiment-data-v3** (bản mới nhất). "
         "Push nhánh và ghim `REPO_COMMIT` trước khi chạy.",
         repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
+    Experiment(
+        "kaggle_qd182_d3_shuffled.ipynb", "Bài 2 — QĐ182 đối chứng âm: chuyển giao đơn giản với nhãn nguồn xáo",
+        "select-on-source và pooled (đúng hàm và seed của E7) với nhãn TCGA bị xáo bằng đúng hoán vị của `RQ2_mvp_shuffled` "
+        "(shuffled_source, SHUFFLE_SEED_TAG = 21) → `RQ2_d3_shuffled/`; bốn cohort, n_T ∈ {5, 10, 20}, k ∈ {2, 3, 4, 5, 10}; có điểm từng mẫu.\n"
+        "Nghiệm thu: `JOB_OK`; config.json traceable, `source_labels_shuffled = true`, `shuffle_seed` trùng `RQ2_mvp_shuffled` từng cohort. "
+        "Bảng (khoá seed \"qd182\") sinh ở máy cá nhân bằng script đã commit và push trước khi mở.",
+        ["qd182_d3_shuffled"],
+        "Một phiên, không cần khôi phục output. Kaggle Input: **experiment-data-v3** (bản mới nhất). "
+        "Push nhánh và ghim `REPO_COMMIT` trước khi chạy.",
+        repo_branch="rq2-mvp", repo_url="https://github.com/datachain-uit/CN-23520899-LuanNT.git"),
 ]
 
 JOB_LINE_PREFIX = "JOB = "
